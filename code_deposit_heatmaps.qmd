@@ -1,0 +1,604 @@
+---
+title: "TRACER heatmaps"
+format: html
+editor: visual
+---
+
+```{r}
+#| label: load-packages
+#| include: false
+suppressPackageStartupMessages({
+  library(tidyverse)
+  library(ComplexHeatmap)
+  library(clusterProfiler)
+  library(enrichplot)
+  library(ggsci)
+})
+```
+
+
+```{r}
+vsd <- readRDS("normalized_vst_transformed_counts.rds")
+#colnames(vsd)
+vsd <- vsd[,grepl("Org_L", colnames(vsd))]
+colnames(vsd)
+```
+
+# get gene symbols
+
+```{r}
+head(rownames(vsd))
+nrow(vsd)
+
+grch38 <- annotables::grch38
+
+table(sapply(str_split(rownames(vsd), "_", simplify = F), function(ls) {ls[[length(ls)]]}) %in% grch38$ensgene)
+setdiff(sapply(str_split(rownames(vsd), "_", simplify = F), function(ls) {ls[[length(ls)]]}), grch38$ensgene)
+```
+
+```{r}
+grch38 <- grch38 %>%
+  dplyr::filter(ensgene %in% sapply(str_split(rownames(vsd), "_", simplify = F), function(ls) {ls[[length(ls)]]})) %>%
+  dplyr::filter(biotype == "protein_coding") %>%
+  arrange(factor(ensgene, levels = sapply(str_split(rownames(vsd), "_", simplify = F), function(ls) {ls[[length(ls)]]})))
+
+grch38 %>% head(10)
+head(rownames(vsd), 10)
+```
+
+```{r}
+gene.symbols <- paste0(grch38$symbol, "_", grch38$ensgene)
+head(gene.symbols)
+```
+
+# set new rownames for vsd (optional)
+
+```{r}
+rownames(vsd) <- plyr::mapvalues(rownames(vsd),
+                                 from = grch38$ensgene, 
+                                 to = gene.symbols)
+
+head(rownames(vsd))
+```
+
+# genes to visualize
+
+## Macrophage
+
+```{r}
+gene.list.steele <- readRDS("Steele_TAM_geneList_more.rds")
+
+gene.list.tracer <- readRDS("DESeq2_proteincoding_DEGs-comparison-Mac-L136vsHypNorm.rds")
+unique(gene.list.tracer$group)
+gene.list.tracer <- gene.list.tracer %>%
+  filter(sample.type == "CC") %>%
+  filter(grepl("Consensus positive|Consensus negative|TRACER positive|TRACER negative", group))
+
+gene.list <- gene.list.steele
+gene.list <- gene.list.tracer
+```
+
+## Epithelial
+
+```{r}
+gene.list.tracer <- readRDS("DESeq2_proteincoding_DEGs-comparison-Org-L136vsHypNorm.rds")
+unique(gene.list.tracer$group)
+gene.list.tracer <- gene.list.tracer %>%
+  filter(sample.type == "CC") %>%
+  filter(grepl("Consensus positive|Consensus negative|TRACER positive|TRACER negative", group))
+
+gene.list.tracer.specific <- readRDS("DESeq2_proteincoding_DEGs-comparison-Org-L136vsHypNorm.rds")
+gene.list.tracer.specific <- gene.list.tracer.specific %>%
+  filter(sample.type == "MC") %>%
+  filter(grepl("Absence in HypNorm", group)) %>%
+  filter((p.adj.L136 < 0.05) & !is.na(p.adj.L136)) %>%
+  filter((log2FC.L136 > 0.5 & log2FC.HypNorm < 0.05) | (log2FC.L136 < -0.5 & log2FC.HypNorm > -0.05))
+
+gene.list.hypnorm.specific <- readRDS("DESeq2_proteincoding_DEGs-comparison-Org-L136vsHypNorm.rds")
+gene.list.hypnorm.specific <- gene.list.hypnorm.specific %>%
+  filter(sample.type == "CC") %>%
+  filter(grepl("Absence in TRACER", group)) %>%
+  filter((p.adj.HypNorm < 0.05) & !is.na(p.adj.HypNorm)) %>%
+  filter((log2FC.HypNorm > 0.5 & log2FC.L136 < 0.05) | (log2FC.HypNorm < -0.5 & log2FC.L136 > -0.05))
+
+gene.list.MC.specific <- readRDS("DESeq2_proteincoding_DEGs-comparison-Org-MCvsCC.rds")
+gene.list.MC.specific <- gene.list.MC.specific %>%
+  filter(condition == "L136") %>%
+  filter(grepl("Absence in CC", group)) %>%
+  filter((p.adj.MC < 0.05) & !is.na(p.adj.MC)) %>%
+  filter((log2FC.MC > 0.5 & log2FC.CC < 0.05) | (log2FC.MC < -0.5 & log2FC.CC > -0.05))
+
+gene.list <- gene.list.tracer
+gene.list <- gene.list.MC.specific
+gene.list <- gene.list.tracer.specific
+gene.list <- gene.list.hypnorm.specific
+```
+
+## custom gene lists
+
+```{r}
+gene.list <- c("CA9", "LGR5")
+```
+
+# format gene list (optional)
+
+```{r}
+# used for gene symbols
+gene.list <- paste0("^", gene.list, "_")
+```
+
+# get gene names (choose appropriate)
+
+```{r}
+genes.select <- grep(paste(gene.list, collapse = "|"), rownames(vsd), value = T)
+genes.select <- intersect(paste0(gene.list$gene.name, "_", gene.list$gene), rownames(vsd))
+```
+
+# annotation tracks and splits
+
+## from resLFC comparison dataframes
+
+```{r}
+# column stuff
+split.col <- str_split(colnames(vsd), "_L|_Hy|_Nor", simplify = T)[,2]
+split.col <- str_split(split.col, "", simplify = T)[,2]
+names(split.col) <- colnames(vsd)
+
+holder <- colData(vsd) |> as.data.frame() |> filter(sample_id %in% colnames(vsd)) |> select(sample_id, Sample_type, condition) # |> column_to_rownames("sample_id")
+split.col <- data.frame(Sample_type = holder %>% pull(Sample_type),
+                        Condition = holder %>% pull(condition),
+                        Donor = split.col)
+split.col <- split.col %>%
+  mutate(System = ifelse(grepl("L", Condition), "TRACER", "HypNorm"))
+#names(split.col) <- rownames(holder)
+rm(holder)
+
+head(colnames(vsd))
+head(split.col)
+
+annot.col <- as.data.frame(colData(vsd)) |> dplyr::select(Sample_type, celltype, Cell_count, sizeFactor, condition)
+
+head(colnames(vsd))
+head(rownames(annot.col))
+
+# row stuff
+annot.row <- gene.list |> filter(paste0(gene.name, "_", gene) %in% genes.select)
+split.row <- plyr::mapvalues(annot.row$group, 
+                             from = c("Absence in CC : MC positive", "Absence in CC : MC negative",
+                                      "Absence in TRACER : HypNorm positive", "Absence in TRACER : HypNorm negative",
+                                      "Absence in HypNorm : TRACER positive", "Absence in HypNorm : TRACER negative",
+                                      "HypNorm negative : TRACER positive", "HypNorm positive : TRACER negative",
+                                      "Consensus positive", "Consensus negative"), 
+                             to = c("Genes positively graded\nonly in Monoculture", "Genes negatively graded\nonly in Monoculture", 
+                                    "Genes up-regulated\nonly in Hypoxia", "Genes down-regulated\nonly in Hypoxia",
+                                    "Positive L1 -> L6 gradient only in TRACER", "Negative L1 -> L6 gradient only in TRACER",
+                                    "Positive L1 -> L6 gradient in TRACER", "Negative L1 -> L6 gradient in TRACER",
+                                    "Positive L1 -> L6 gradient in TRACER", "Negative L1 -> L6 gradient in TRACER"))
+names(split.row) <- paste0(annot.row$gene.name, "_", annot.row$gene)
+
+head(rownames(vsd[genes.select,]))
+head(split.row)
+
+holder <- paste0(annot.row$gene.name, "_", annot.row$gene)
+annot.row <- annot.row %>%
+  select(-gene, -gene.name, -group, -hypoxia.gene, -top.gene, -p.adj.mean)
+rownames(annot.row) <- holder
+rm(holder)
+
+head(rownames(vsd[genes.select,]))
+head(rownames(annot.row))
+```
+
+# heatmap
+
+## custom gene lists
+
+### choose appropriate code block - custom gene lists
+
+```{r}
+# row annotation for TRACER DEGs
+row_ha <- rowAnnotation(
+  `log2FC TRACER` = annot.row$log2FC.L136,
+  `log2FC Hyp.vs.Norm` = annot.row$log2FC.HypNorm,
+  `-log(p.adj) TRACER` = -log(annot.row$p.adj.L136),
+  `-log(p.adj) Hyp.vs.Norm` = -log(annot.row$p.adj.HypNorm),
+  col = list(`log2FC TRACER` = circlize::colorRamp2(c(min(annot.row$log2FC.HypNorm, na.rm = TRUE), 
+                                                      0, 
+                                                      max(annot.row$log2FC.HypNorm, na.rm = TRUE)), 
+                                                    viridisLite::viridis(3, option = "E")),
+             `log2FC Hyp.vs.Norm` = circlize::colorRamp2(c(min(annot.row$log2FC.HypNorm, na.rm = TRUE), 
+                                                           0, 
+                                                           max(annot.row$log2FC.HypNorm, na.rm = TRUE)), 
+                                                         viridisLite::viridis(3, option = "E")),
+             `-log(p.adj) TRACER` = circlize::colorRamp2(c(0, 
+                                                           max(-log(annot.row$p.adj.HypNorm), na.rm = TRUE)), 
+                                                    viridisLite::viridis(2, option = "C")),
+             `-log(p.adj) Hyp.vs.Norm` = circlize::colorRamp2(c(0, 
+                                                                max(-log(annot.row$p.adj.HypNorm), na.rm = TRUE)), 
+                                                              viridisLite::viridis(2, option = "C"))),
+  annotation_label = gt_render(c("log<sub>2</sub>(fold change)\nGradient", "log<sub>2</sub>(fold change)\nHypoxia", 
+                                 "-log(p<sub>adj</sub>)\nGradient", "-log(p<sub>adj</sub>)\nHypoxia")),
+  annotation_legend_param = list(
+    `log2FC TRACER` = list(
+      title = gt_render("log<sub>2</sub>(fold change)")
+    ),
+    `-log(p.adj) TRACER` = list(
+      title = gt_render("-log(p<sub>adj</sub>)")
+    ),
+    `log2FC Hyp.vs.Norm` = list(
+      title = gt_render("log<sub>2</sub>(fold change)<br>Hypoxia")
+    ),
+    `-log(p.adj) Hyp.vs.Norm` = list(
+      title = gt_render("-log(p<sub>adj</sub>)<br>Hypoxia")
+    )
+  ),
+  show_legend = c(TRUE, FALSE, TRUE, FALSE)
+)
+```
+
+### average over replicates - custom gene lists
+
+```{r}
+mean.mtx.for.heatmap <- (assay(vsd) |> scale())[genes.select,] |> as.data.frame()
+
+mean.mtx.for.heatmap <- mean.mtx.for.heatmap |>
+  rownames_to_column("gene")
+
+mean.mtx.for.heatmap$gene <- str_split(mean.mtx.for.heatmap$gene, "_", simplify = TRUE)[,1]
+```
+
+### choose appropriate code block - custom gene lists
+
+```{r}
+mean.mtx.for.heatmap <- mean.mtx.for.heatmap |>
+  rowwise() |>
+  mutate(`Co-culture L1` = mean(c_across(starts_with("CC_Org_L1")), na.rm = TRUE),
+         `Co-culture L3` = mean(c_across(starts_with("CC_Org_L3")), na.rm = TRUE),
+         `Co-culture L6` = mean(c_across(starts_with("CC_Org_L6")), na.rm = TRUE),
+         `Monoculture L1` = mean(c_across(starts_with("Org_L1")), na.rm = TRUE),
+         `Monoculture L3` = mean(c_across(starts_with("Org_L3")), na.rm = TRUE),
+         `Monoculture L6` = mean(c_across(starts_with("Org_L6")), na.rm = TRUE)) |>
+  ungroup() |>
+  select(!contains("Org")) |>
+  column_to_rownames("gene") |>
+  as.matrix()
+
+mean.mtx.for.heatmap <- mean.mtx.for.heatmap |>
+  rowwise() |>
+  mutate(Hypoxia = mean(c_across(contains("Hyp")), na.rm = TRUE),
+         Normoxia = mean(c_across(contains("Norm")), na.rm = TRUE),
+         `TRACER L1` = mean(c_across(contains("L1")), na.rm = TRUE),
+         `TRACER L3` = mean(c_across(contains("L3")), na.rm = TRUE),
+         `TRACER L6` = mean(c_across(contains("L6")), na.rm = TRUE)) |>
+  ungroup() |>
+  select(!contains("CC_Org")) |>
+  column_to_rownames("gene") |>
+  as.matrix()
+```
+
+### figure s5d - custom gene lists
+
+```{r}
+ht <- Heatmap(mean.mtx.for.heatmap,
+        name = "Normalized Expression",
+        cluster_rows = T,
+        cluster_columns = F,
+        show_row_names = T,
+        row_title_rot = 90,
+        row_title_gp = gpar(fontsize = 14, fontface = "bold"),
+        column_names_gp = gpar(fontsize = 14, fontface = "bold"),
+        #column_split = c(rep("Co-culture", 3), rep("Monoculture", 3)),
+        #column_split = rep(c("L1", "L3", "L6"), 2),
+        column_split = c(rep("HypNorm", 2), rep("TRACER", 3)),
+        column_title = NULL,
+        left_annotation = row_ha
+        )
+
+pdf("figure-s5d.pdf", width = 8, height = 4)
+draw(ht, merge_legend = TRUE)
+dev.off()
+
+rm(ht)
+```
+
+## resLFC comparison dataframes
+
+### choose appropriate code block - resLFC comparison dataframes
+
+```{r}
+# row annotation for MC specific TRACER DEGs
+MC.specific.gene.groups <- readRDS("flattenedgenes_filtered_padj_0.05_stringent_grouped.rds") |>
+  select(gene.name, gene, group) |>
+  mutate(Gene = paste0(gene.name, "_", gene)) |>
+  column_to_rownames("Gene") |>
+  select(-gene, -gene.name) |>
+  as.matrix()
+
+MC.specific.gene.groups <- MC.specific.gene.groups[rownames(annot.row),]
+MC.specific.gene.groups <- plyr::mapvalues(MC.specific.gene.groups, 
+                                           from = c(
+                                             "other",
+                                             NA,
+                                             "Decreasing gradient in MC : suppressed in L1",
+                                             "Decreasing gradient in MC : elevated in L6",
+                                             "Decreasing gradient in MC : elevated in L1 : elevated in L6",
+                                             "Increasing gradient in MC : elevated in L1",
+                                             "Increasing gradient in MC : suppressed in L6"
+                                           ),
+                                           to = c(
+                                             "CC Multi-layer change",
+                                             "CC Multi-layer change",
+                                             "CC L1 suppressed",
+                                             "CC L6 elevated",
+                                             "CC L1 and L6 elevated",
+                                             "CC L1 elevated",
+                                             "CC L6 suppressed"
+                                           ))
+
+group.pal <- pal_npg("nrc")(length(unique(MC.specific.gene.groups)))
+group.pal <- setNames(group.pal, unique(MC.specific.gene.groups))
+
+group.pal.flip.horizontal <- group.pal
+group.pal.flip.horizontal <- setNames(group.pal.flip.horizontal, gsub("CC ", "", unique(MC.specific.gene.groups)))
+
+row_ha_flip_horizontal <- columnAnnotation(
+  `log2FC in Co-culture` = annot.row$log2FC.CC,
+  `log2FC in Monoculture` = annot.row$log2FC.MC,
+  `-log(p.adj) Co-culture` = -log(annot.row$p.adj.CC),
+  `-log(p.adj) Monoculture` = -log(annot.row$p.adj.MC),
+  `Group` = gsub("CC ", "", MC.specific.gene.groups),
+  col = list(
+    `log2FC in Co-culture` = circlize::colorRamp2(c(min(annot.row$log2FC.MC), 0, max(annot.row$log2FC.MC)), viridisLite::viridis(3, option = "E")),
+    `log2FC in Monoculture` = circlize::colorRamp2(c(min(annot.row$log2FC.MC), 0, max(annot.row$log2FC.MC)), viridisLite::viridis(3, option = "E")),
+    `-log(p.adj) Co-culture` = circlize::colorRamp2(c(0, max(-log(annot.row$p.adj.MC))), c("white", "purple")),
+    `-log(p.adj) Monoculture` = circlize::colorRamp2(c(0, max(-log(annot.row$p.adj.MC))), c("white", "purple")),
+    `Group` = group.pal.flip.horizontal[!is.na(names(group.pal.flip.horizontal))]
+  ),
+  annotation_label = gt_render(c("log<sub>2</sub>(fold change) CC", 
+                                 "log<sub>2</sub>(fold change) MC", 
+                                 "-log(p<sub>adj</sub>) CC", 
+                                 "-log(p<sub>adj</sub>) MC",
+                                 "")),
+  annotation_legend_param = list(
+    `log2FC in Co-culture` = list(
+      title = gt_render("log<sub>2</sub>(fold change) CC"), direction = "horizontal"
+    ),
+    `log2FC in Monoculture` = list(
+      title = gt_render("log<sub>2</sub>(fold change) MC"), direction = "horizontal"
+    ),
+    `-log(p.adj) Co-culture` = list(
+      title = gt_render("-log(p<sub>adj</sub>) CC"), direction = "horizontal"
+    ),
+    `-log(p.adj) Monoculture` = list(
+      title = gt_render("-log(p<sub>adj</sub>) MC"), direction = "horizontal"
+    ),
+    `Group` = list(
+      title = gt_render("Cause of Gradient Flattening in CC"), direction = "horizontal", ncol = 2
+    )
+  )
+)
+
+# row annotation for HypNorm specific CC DEGs
+row_ha_flip_horizontal <- columnAnnotation(
+  #log2FC.TRACER = annot.row$log2FC.L136,
+  `log2FC Hyp.vs.Norm` = annot.row$log2FC.HypNorm,
+  #neg.log.p.adj.TRACER = -log(annot.row$p.adj.L136),
+  `-log(p.adj) Hyp.vs.Norm` = -log(annot.row$p.adj.HypNorm),
+  col = list(
+    #log2FC.TRACER = circlize::colorRamp2(c(min(annot.row$log2FC.L136), 0, max(annot.row$log2FC.L136)), viridisLite::viridis(3, option = "D")),
+    #`log2FC Hyp.vs.Norm` = circlize::colorRamp2(c(min(annot.row$log2FC.HypNorm), 0, max(annot.row$log2FC.HypNorm)), c("blue", "white", "red")),
+    `log2FC Hyp.vs.Norm` = circlize::colorRamp2(c(min(annot.row$log2FC.HypNorm), 0, max(annot.row$log2FC.HypNorm)), viridisLite::viridis(3, option = "C")),
+    #neg.log.p.adj.TRACER = circlize::colorRamp2(c(0, max(-log(annot.row$p.adj.L136))), c("white", "purple")),
+    `-log(p.adj) Hyp.vs.Norm` = circlize::colorRamp2(c(0, max(-log(annot.row$p.adj.HypNorm))), c("white", "grey30"))
+  ),
+  annotation_label = gt_render(c("log<sub>2</sub>(fold change) Hypoxia", "-log(p<sub>adj</sub>) Hypoxia")),
+  annotation_legend_param = list(
+    `log2FC Hyp.vs.Norm` = list(
+      title = gt_render("log<sub>2</sub>(fold change) Hypoxia"), direction = "horizontal"
+    ),
+    `-log(p.adj) Hyp.vs.Norm` = list(
+      title = gt_render("-log(p<sub>adj</sub>) Hypoxia"), direction = "horizontal"
+    )
+  )
+)
+```
+
+### average over replicates - resLFC comparison dataframes
+
+```{r}
+mean.mtx.for.heatmap <- (assay(vsd) |> scale())[genes.select,] |> as.data.frame()
+
+rownames(mean.mtx.for.heatmap) <- str_split(rownames(mean.mtx.for.heatmap), "_", simplify = TRUE)[,1]
+mean.mtx.for.heatmap <- mean.mtx.for.heatmap |> rownames_to_column("gene")
+```
+
+### choose appropriate code block - resLFC comparison dataframes
+
+```{r}
+mean.mtx.for.heatmap <- mean.mtx.for.heatmap |>
+  rowwise() |>
+  mutate(`Monoculture L1` = mean(c_across(starts_with("Org_L1")), na.rm = TRUE),
+         `Monoculture L3` = mean(c_across(starts_with("Org_L3")), na.rm = TRUE),
+         `Monoculture L6` = mean(c_across(starts_with("Org_L6")), na.rm = TRUE),
+         `Co-culture L1` = mean(c_across(starts_with("CC_Org_L1")), na.rm = TRUE),
+         `Co-culture L3` = mean(c_across(starts_with("CC_Org_L3")), na.rm = TRUE),
+         `Co-culture L6` = mean(c_across(starts_with("CC_Org_L6")), na.rm = TRUE)) |>
+  ungroup() |>
+  select(!contains("Org")) |>
+  column_to_rownames("gene") |>
+  as.matrix()
+
+mean.mtx.for.heatmap <- mean.mtx.for.heatmap |>
+  rowwise() |>
+  mutate(Hypoxia = mean(c_across(contains("Hyp")), na.rm = TRUE),
+         Normoxia = mean(c_across(contains("Norm")), na.rm = TRUE),
+         `TRACER L1` = mean(c_across(contains("L1")), na.rm = TRUE),
+         `TRACER L3` = mean(c_across(contains("L3")), na.rm = TRUE),
+         `TRACER L6` = mean(c_across(contains("L6")), na.rm = TRUE)) |>
+  ungroup() |>
+  select(!contains("CC_Org")) |>
+  column_to_rownames("gene") |>
+  as.matrix()
+```
+
+### figure 5f - resLFC comparison dataframes
+
+```{r}
+ht <- Heatmap(mean.mtx.for.heatmap |> t(),
+        name = "Normalized Expression",
+        cluster_rows = F,
+        cluster_columns = T,
+        show_column_names = F,
+        column_split = split.row,
+        column_title_rot = 0,
+        column_title_gp = gpar(fontsize = 14, fontface = "bold"),
+        row_names_gp = gpar(fontsize = 14, fontface = "bold"),
+        row_split = factor(c(rep("Monoculture", 3), rep("Co-culture", 3)), levels = c("Monoculture", "Co-culture")),
+        cluster_row_slices = FALSE,
+        row_title_gp = gpar(fontface = "bold"),
+        #row_split = rep(c("L1", "L3", "L6"), 2),
+        top_annotation = row_ha_flip_horizontal,
+        # top_annotation = HeatmapAnnotation(#`Sample type` = rep("Co-culture", ncol(mean.mtx.for.heatmap)),
+        #                                    `Cell type` = rep("ODC", ncol(mean.mtx.for.heatmap)))
+        heatmap_legend_param = list(direction = "horizontal")
+        )
+
+pdf("figure-5f.pdf", width = 13, height = 6)
+draw(ht, merge_legend = TRUE, heatmap_legend_side = "bottom", annotation_legend_side = "bottom")
+dev.off()
+rm(ht)
+```
+
+### figure 4g - resLFC comparison dataframes
+
+```{r}
+ht <- Heatmap(mean.mtx.for.heatmap |> t(),
+        name = "Normalized Expression",
+        # col = circlize::colorRamp2(c(min(mean.mtx.for.heatmap), median(mean.mtx.for.heatmap), max(mean.mtx.for.heatmap)), 
+        #                            viridisLite::viridis(3, option = "C")),
+        cluster_rows = F,
+        cluster_columns = T,
+        show_column_names = F,
+        column_split = split.row,
+        column_title_rot = 0,
+        column_title_gp = gpar(fontsize = 14, fontface = "bold"),
+        row_names_gp = gpar(fontsize = 14, fontface = "bold"),
+        row_split = c(rep("HypNorm", 2), rep("TRACER", 3)),
+        top_annotation = row_ha_flip_horizontal,
+        # top_annotation = HeatmapAnnotation(`Sample type` = rep("Co-culture", ncol(mean.mtx.for.heatmap)),
+        #                                    `Cell type` = rep("ODC", ncol(mean.mtx.for.heatmap)))
+        heatmap_legend_param = list(direction = "horizontal")
+        )
+
+pdf("figure-4g-horizontal.pdf", width = 12, height = 5)
+draw(ht, merge_legend = TRUE, heatmap_legend_side = "bottom", annotation_legend_side = "bottom")
+dev.off()
+rm(ht)
+```
+
+# figure s6c
+
+```{r}
+p <- (mean.mtx.for.heatmap |> as.data.frame() |>
+  mutate(Group = split.row) |>
+  mutate(flatten = MC.specific.gene.groups) |>
+  filter(Group == "Genes negatively graded\nonly in Monoculture") |>
+  filter(flatten == "CC L1 suppressed") |>
+  rownames() |>
+  str_split("_", simplify = TRUE))[,2] |>
+  enricher( 
+    pvalueCutoff = 0.05,
+    pAdjustMethod = "BH",
+    minGSSize = 10,
+    maxGSSize = 500,
+    qvalueCutoff = 0.2,
+    TERM2GENE = t2g.H) |>
+  dotplot(showCategory = 10) +
+  ggtitle("Negative graded genes only in MC\nCC L1 suppressed")
+
+p
+ggsave(filename = paste0("figure-s6c.pdf"), plot = p, device = "pdf", height = 5, width = 7, units = "in", bg = "white")
+```
+
+# figure s4b
+
+```{r}
+resLFC <- readRDS("DESeq2_proteincoding_results-Mac-L136-CC.rds")
+gene.list <- readRDS("Steele_TAM_geneList_more.rds")
+mean.mtx.for.heatmap <- readRDS("Steele_TAM_geneList_more_exprs_in_TRACER.rds") |> column_to_rownames("gene")
+```
+
+```{r}
+table(rownames(resLFC) %in% str_split(rownames(mean.mtx.for.heatmap), "_", simplify = TRUE)[,2])
+```
+
+```{r}
+resLFC <- resLFC[rownames(resLFC) %in% str_split(rownames(mean.mtx.for.heatmap), "_", simplify = TRUE)[,2],]
+resLFC$padj[is.na(resLFC$padj)] <- 1
+resLFC <- resLFC[resLFC$padj < 0.05,]
+resLFC <- resLFC |> as.data.frame()
+```
+
+```{r}
+mean.mtx.for.heatmap <- mean.mtx.for.heatmap[str_split(rownames(mean.mtx.for.heatmap), "_", simplify = TRUE)[,2] %in% rownames(resLFC),]
+resLFC <- resLFC[str_split(rownames(mean.mtx.for.heatmap), "_", simplify = TRUE)[,2],]
+
+rownames(resLFC) <- str_split(rownames(mean.mtx.for.heatmap), "_", simplify = TRUE)[,1]
+rownames(mean.mtx.for.heatmap) <- str_split(rownames(mean.mtx.for.heatmap), "_", simplify = TRUE)[,1]
+
+gene.list <- gene.list |> filter(Gene %in% rownames(mean.mtx.for.heatmap)) #remember to check gene list is has same gene order as mean.mtx.for.heatmap 
+```
+
+```{r}
+mean.mtx.for.heatmap <- mean.mtx.for.heatmap |> rownames_to_column("gene")
+
+mean.mtx.for.heatmap <- mean.mtx.for.heatmap |>
+  rowwise() |>
+  mutate(`TRACER L1` = mean(c_across(contains("L1")), na.rm = TRUE),
+         `TRACER L3` = mean(c_across(contains("L3")), na.rm = TRUE),
+         `TRACER L6` = mean(c_across(contains("L6")), na.rm = TRUE)) |>
+  ungroup() |>
+  select(!contains("CC_")) |>
+  column_to_rownames("gene") |>
+  as.matrix()
+```
+
+```{r}
+row.split <- ifelse(resLFC$log2FoldChange > 0, "Positive Gradient\nL1-to-L6", "Negative Gradient\nL1-to-L6")
+
+# row annotation for Steele macrophage markers with TRACER gradients
+row_ha <- rowAnnotation(
+  `log2FC` = resLFC$log2FoldChange,
+  `-log(p.adj)` = -log(resLFC$padj),
+  `Steele macrophage subtype` = gene.list$celltype,
+  col = list(`log2FC` = circlize::colorRamp2(c(min(resLFC$log2FoldChange), 0, max(resLFC$log2FoldChange)), viridisLite::viridis(3, option = "E"))),
+  annotation_label = gt_render(c("log<sub>2</sub>(fold change)", "-log(p<sub>adj</sub>)", "Steele subtype")),
+  annotation_legend_param = list(
+    `log2FC` = list(
+      title = gt_render("log<sub>2</sub>(fold change)")
+    ),
+    `-log(p.adj)` = list(
+      title = gt_render("-log(p<sub>adj</sub>)")
+    ),
+    `Steele macrophage subtype` = list(
+      title = gt_render("Steele subtype")
+    )
+  )
+)
+```
+
+```{r}
+pdf("figure-s4b.pdf", width = 7, height = 7.1)
+Heatmap(mean.mtx.for.heatmap,
+        name = "Normalized\nExpression",
+        cluster_columns = FALSE,
+        row_split = row.split,
+        row_title_rot = 0,
+        row_title_gp = gpar(fontface = "bold"),
+        column_names_gp = gpar(fontface = "bold"),
+        column_title = "Co-cultured Mac.",
+        column_title_gp = gpar(fontface = "bold"),
+        right_annotation = row_ha)
+dev.off()
+```
+

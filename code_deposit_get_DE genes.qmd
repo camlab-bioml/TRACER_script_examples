@@ -1,0 +1,126 @@
+---
+title: "Run DESeq2"
+format: html
+editor: visual
+---
+
+```{r}
+#| label: load-packages
+#| include: false
+suppressPackageStartupMessages({
+  library(cancersea)
+  library(tidyverse)
+  library(DESeq2)
+})
+```
+
+# load counts matrix and sample metadata
+
+```{r}
+counts.mtx <- readRDS("counts_matrix.rds")
+coldata <- readRDS("sample_metadata.rds")
+```
+
+# check specific genes
+
+```{r}
+head(rownames(counts.mtx))
+```
+
+# DE analysis
+
+## optional filtering of samples
+
+```{r}
+coldata.dds <- coldata %>% dplyr::filter(
+    (celltype == "Org") & 
+    (
+      (condition == "L1" & Sample_type == "Organoid monoculture") | 
+      #(condition == "L3" & Sample_type == "Organoid monoculture") |
+      (condition == "L6" & Sample_type == "Organoid monoculture")  
+    )
+  )
+counts.mtx.dds <- counts.mtx[,coldata.dds$sample_id]
+```
+
+## filtering genes
+
+### remove non-protein coding genes
+
+```{r}
+grch38 <- annotables::grch38 %>% 
+  dplyr::filter(biotype == "protein_coding") %>%
+  dplyr::select(ensgene, symbol, chr, start, end, biotype, description)
+
+nrow(counts.mtx.dds)
+length(intersect(rownames(counts.mtx.dds), grch38$ensgene))
+
+counts.mtx.dds <- counts.mtx.dds[rownames(counts.mtx.dds) %in% grch38$ensgene,]
+```
+
+### remove cutstom gene lists
+
+```{r}
+data('available_pathways')
+available_pathways
+data('cell_cycle')
+cell_cycle %>% head()
+
+nrow(counts.mtx.dds)
+length(intersect(rownames(counts.mtx.dds), cell_cycle$ensembl_gene_id))
+
+counts.mtx.dds <- counts.mtx.dds[!(rownames(counts.mtx.dds) %in% cell_cycle$ensembl_gene_id),]
+rm(available_pathways)
+```
+
+## optional encoding condition as numeric vector
+
+```{r}
+coldata.dds$condition <- str_split(coldata.dds$condition, "L", simplify = T)[,2] %>% as.numeric()
+coldata.dds$condition <- plyr::mapvalues(coldata.dds$condition,
+                                         from = c(1, 3, 6),
+                                         to = c(1, 2, 3)) %>% as.numeric()
+```
+
+## create DESeqDataSet
+
+```{r}
+dds <- DESeqDataSetFromMatrix(countData = counts.mtx.dds,
+                              colData = coldata.dds,
+                              design = ~ condition)
+dds <- dds[(rowSums(counts(dds) >= 10) >= 1),]
+dds
+```
+
+## set reference level
+
+```{r}
+#dds$Sample_type <- relevel(dds$Sample_type, ref = "Macrophage monoculture")
+#dds$celltype <- relevel(dds$celltype, ref = "Org")
+#dds$condition <- relevel(dds$condition, ref = "Norm")
+dds$condition <- relevel(dds$condition, ref = "L1")
+```
+
+## run DESeq2
+
+```{r}
+dds <- DESeq(dds)
+
+resultsNames(dds)
+```
+
+## get desired results (with FDR cutoff at 0.05) and LFC shrunk results
+
+```{r}
+resultName <- "condition_L6_vs_L1"
+
+res <- results(dds, alpha = 0.05, name = resultName)
+
+resLFC <- lfcShrink(dds, coef = resultName, type = "apeglm")
+
+rm(resultName)
+```
+
+```{r}
+saveRDS(resLFC, file = "DESeq2_proteincoding_results-Org-L1vsL6-MC.rds")
+```

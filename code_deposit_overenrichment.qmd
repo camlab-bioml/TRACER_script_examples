@@ -1,0 +1,97 @@
+---
+title: "TRACER ORA"
+format: html
+editor: visual
+---
+
+```{r}
+#| label: load-packages
+#| include: false
+suppressPackageStartupMessages({
+  library(tidyverse)
+  library(clusterProfiler)
+  library(msigdbr)
+  library(enrichplot)
+})
+```
+
+# load data
+
+```{r}
+resLFC <- readRDS(file = "DESeq2_proteincoding_results-Org-L1vsL6-MC.rds")
+```
+
+```{r}
+head(rownames(resLFC))
+```
+
+```{r}
+gene.symbols.resLFC <- plyr::mapvalues(rownames(resLFC), 
+                                       from = annotables::grch38$ensgene,
+                                       to = annotables::grch38$symbol,
+                                       warn_missing = F)
+gene.symbols.resLFC %>% head()
+```
+
+# enrichment analysis preparation
+
+```{r}
+holder <- resLFC[!is.na(resLFC$padj),]
+holder <- holder[holder$padj < 0.05,]
+
+## feature 1: numeric vector
+geneList = holder$log2FoldChange
+
+## feature 2: named vector
+names(geneList) = rownames(holder)
+
+## feature 3: decreasing order
+geneList = sort(geneList, decreasing = TRUE)
+
+rm(holder)
+
+head(geneList)
+tail(geneList)
+```
+
+### define LFC > 0 as DEGs
+
+```{r}
+gene <- names(geneList)[geneList > 0]
+
+head(gene)
+```
+
+# enrichment analysis using MSigDb
+
+## get human hallmark/GOBP/KEGG genesets
+
+```{r}
+t2g.H <- msigdbr(species = "Homo sapiens", category = "H") %>% 
+  select(gs_name, ensembl_gene)
+head(t2g.H)
+```
+
+## overrepesentation analysis
+
+```{r}
+em <- enricher(gene, 
+               pvalueCutoff = 0.05,
+               pAdjustMethod = "BH",
+               minGSSize = 10,
+               maxGSSize = 500,
+               qvalueCutoff = 0.2,
+               TERM2GENE = t2g.H)
+head(em)
+```
+
+## plotting
+
+### overrepresentation
+
+```{r}
+p <- dotplot(em, showCategory = 10) + ggtitle(paste("ORA", "Organoid cells", "MC", "TRACER L6 vs. L1", sep = " "))
+p
+ggsave(filename = paste0("figure-s3b-left.pdf"), plot = p, device = "pdf", height = 5, width = 7, units = "in", dpi = 360, bg = "white")
+```
+

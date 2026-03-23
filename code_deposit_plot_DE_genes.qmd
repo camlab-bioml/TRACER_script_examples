@@ -1,0 +1,458 @@
+---
+title: "TRACER plot DE genes"
+format: html
+editor: visual
+---
+
+```{r}
+#| label: load-packages
+#| include: false
+suppressPackageStartupMessages({
+  library(tidyverse)
+  library(ggpubr)
+  library(EnhancedVolcano)
+})
+```
+
+## plot DEGs
+
+```{r}
+resLFC <- readRDS(file = "DESeq2_proteincoding_results-Org-L1vsL6-MC.rds")
+```
+
+```{r}
+head(rownames(resLFC))
+```
+
+```{r}
+gene.symbols.resLFC <- plyr::mapvalues(rownames(resLFC), 
+                                       from = annotables::grch38$ensgene,
+                                       to = annotables::grch38$symbol,
+                                       warn_missing = F)
+gene.symbols.resLFC %>% head()
+```
+
+### volcano plots
+
+```{r}
+p.title <- "MC TRACER layers L6 vs. L1"
+sub.title <- "Organoid cells"
+filename.prefix <- "figure-s3a"
+
+p <- EnhancedVolcano(resLFC,
+                     lab = gene.symbols.resLFC,
+                     drawConnectors = T,
+                     boxedLabels = T,
+                     pCutoff = 1e-2,
+                     selectLab = c("HIF1A", "DDIT3", "DDIT4", "VEGFA", "CA9", "SLC2A1"),
+                     max.overlaps = 30,
+                     x = "log2FoldChange",
+                     y = "padj",
+                     title = p.title,
+                     subtitle = sub.title)
+p
+ggsave(paste0(filename.prefix, "-left.pdf"), plot = p, device = "pdf", width = 7, height = 7, units = "in", dpi = "retina")
+
+rm(p.title, sub.title, filename.prefix)
+```
+
+## compare DEGs between L136 and HypNorm
+
+```{r}
+resLFC.l136.CC <- readRDS("DESeq2_proteincoding_results-Org-L136-CC.rds")
+resLFC.l136.MC <- readRDS("DESeq2_proteincoding_results-Org-L136-MC.rds")
+resLFC.hypnorm.CC <- readRDS("DESeq2_proteincoding_results-Org-HypNorm-CC.rds")
+resLFC.hypnorm.MC <- readRDS("DESeq2_proteincoding_results-Org-HypNorm-MC.rds")
+```
+
+```{r}
+# genes.common <- intersect(rownames(resLFC.l136.MC[resLFC.l136.MC$padj < 0.05 & !is.na(resLFC.l136.MC$padj),]), 
+#                           rownames(resLFC.hypnorm.MC[resLFC.hypnorm.MC$padj < 0.05 & !is.na(resLFC.hypnorm.MC$padj),]))
+# genes.common <- intersect(rownames(resLFC.l136.CC[resLFC.l136.CC$padj < 0.05 & !is.na(resLFC.l136.CC$padj),]), 
+#                           rownames(resLFC.hypnorm.CC[resLFC.hypnorm.CC$padj < 0.05 & !is.na(resLFC.hypnorm.CC$padj),]))
+# 
+# genes.common <- intersect(rownames(resLFC.l136.CC[resLFC.l136.CC$padj < 0.05 & !is.na(resLFC.l136.CC$padj),]), 
+#                           rownames(resLFC.l136.MC[resLFC.l136.MC$padj < 0.05 & !is.na(resLFC.l136.MC$padj),]))
+# genes.common <- intersect(rownames(resLFC.hypnorm.CC[resLFC.hypnorm.CC$padj < 0.05 & !is.na(resLFC.hypnorm.CC$padj),]), 
+#                           rownames(resLFC.hypnorm.MC[resLFC.hypnorm.MC$padj < 0.05 & !is.na(resLFC.hypnorm.MC$padj),]))
+```
+
+### df for TRACER DEGs
+
+```{r}
+genes.common <- intersect(rownames(resLFC.l136.CC), rownames(resLFC.l136.MC))
+resLFC.l136.CC <- resLFC.l136.CC[genes.common,]
+resLFC.l136.MC <- resLFC.l136.MC[genes.common,]
+
+df.deg.compare.L136 <- data.frame(log2FC.MC = resLFC.l136.MC$log2FoldChange,
+                                  log2FC.CC = resLFC.l136.CC$log2FoldChange,
+                                  p.adj.MC = resLFC.l136.MC$padj,
+                                  p.adj.CC = resLFC.l136.CC$padj,
+                                  p.adj.mean = rowMeans(cbind(resLFC.l136.MC$padj, resLFC.l136.CC$padj)),
+                                  condition = "L136",
+                                  gene = genes.common)
+```
+
+### df for HypNorm DEGs
+
+```{r}
+genes.common <- intersect(rownames(resLFC.hypnorm.CC), rownames(resLFC.hypnorm.MC))
+resLFC.hypnorm.CC <- resLFC.hypnorm.CC[genes.common,]
+resLFC.hypnorm.MC <- resLFC.hypnorm.MC[genes.common,]
+
+df.deg.compare.hypnorm <- data.frame(log2FC.MC = resLFC.hypnorm.MC$log2FoldChange,
+                                     log2FC.CC = resLFC.hypnorm.CC$log2FoldChange,
+                                     p.adj.MC = resLFC.hypnorm.MC$padj,
+                                     p.adj.CC = resLFC.hypnorm.CC$padj,
+                                     p.adj.mean = rowMeans(cbind(resLFC.hypnorm.MC$padj, resLFC.hypnorm.CC$padj)),
+                                     condition = "HypNorm",
+                                     gene = genes.common)
+```
+
+### df for MC DEGs
+
+```{r}
+genes.common <- intersect(rownames(resLFC.l136.MC), rownames(resLFC.hypnorm.MC))
+resLFC.l136.MC <- resLFC.l136.MC[genes.common,]
+resLFC.hypnorm.MC <- resLFC.hypnorm.MC[genes.common,]
+
+df.deg.compare.MC <- data.frame(log2FC.L136 = resLFC.l136.MC$log2FoldChange,
+                                log2FC.HypNorm = resLFC.hypnorm.MC$log2FoldChange,
+                                p.adj.L136 = resLFC.l136.MC$padj,
+                                p.adj.HypNorm = resLFC.hypnorm.MC$padj,
+                                p.adj.mean = rowMeans(cbind(resLFC.l136.MC$padj, resLFC.hypnorm.MC$padj)),
+                                sample.type = "MC",
+                                gene = genes.common)
+```
+
+### df for CC DEGs
+
+```{r}
+genes.common <- intersect(rownames(resLFC.l136.CC), rownames(resLFC.hypnorm.CC))
+resLFC.l136.CC <- resLFC.l136.CC[genes.common,]
+resLFC.hypnorm.CC <- resLFC.hypnorm.CC[genes.common,]
+
+df.deg.compare.CC <- data.frame(log2FC.L136 = resLFC.l136.CC$log2FoldChange,
+                                log2FC.HypNorm = resLFC.hypnorm.CC$log2FoldChange,
+                                p.adj.L136 = resLFC.l136.CC$padj,
+                                p.adj.HypNorm = resLFC.hypnorm.CC$padj,
+                                p.adj.mean = rowMeans(cbind(resLFC.l136.CC$padj, resLFC.hypnorm.CC$padj)),
+                                sample.type = "CC",
+                                gene = genes.common)
+```
+
+### cleanup
+
+```{r}
+rm(genes.common, 
+   #resLFC.hypnorm.CC, 
+   resLFC.hypnorm.MC, 
+   #resLFC.l136.CC, 
+   resLFC.l136.MC)
+```
+
+### label interesting genes
+
+```{r}
+df.deg.compare.MC <- df.deg.compare.MC %>%
+  mutate(group = if_else(abs(log2FC.HypNorm) < 0.5 & p.adj.L136 < 0.05 & !is.na(p.adj.L136) & log2FC.L136 > 0, 
+                         "Absence in HypNorm : TRACER positive", "other")) %>%
+  mutate(group = if_else(abs(log2FC.HypNorm) < 0.5 & p.adj.L136 < 0.05 & !is.na(p.adj.L136) & log2FC.L136 < 0, 
+                         "Absence in HypNorm : TRACER negative", group)) %>%
+  mutate(group = if_else(abs(log2FC.L136) < 0.5 & p.adj.HypNorm < 0.05 & !is.na(p.adj.HypNorm) & log2FC.HypNorm > 0, 
+                         "Absence in TRACER : HypNorm positive", group)) %>%
+  mutate(group = if_else(abs(log2FC.L136) < 0.5 & p.adj.HypNorm < 0.05 & !is.na(p.adj.HypNorm) & log2FC.HypNorm < 0, 
+                         "Absence in TRACER : HypNorm negative", group)) %>%
+  mutate(group = if_else(log2FC.HypNorm > 0 & p.adj.HypNorm < 0.05 & !is.na(p.adj.HypNorm) & log2FC.L136 < 0 & p.adj.L136 < 0.05 & !is.na(p.adj.L136), 
+                         "HypNorm positive : TRACER negative", group)) %>%
+  mutate(group = if_else(log2FC.HypNorm < 0 & p.adj.HypNorm < 0.05 & !is.na(p.adj.HypNorm) & log2FC.L136 > 0 & p.adj.L136 < 0.05 & !is.na(p.adj.L136), 
+                         "HypNorm negative : TRACER positive", group)) %>%
+  mutate(group = if_else(log2FC.HypNorm > 0 & p.adj.HypNorm < 0.05 & !is.na(p.adj.HypNorm) & log2FC.L136 > 0 & p.adj.L136 < 0.05 & !is.na(p.adj.L136), 
+                         "Consensus positive", group)) %>%
+  mutate(group = if_else(log2FC.HypNorm < 0 & p.adj.HypNorm < 0.05 & !is.na(p.adj.HypNorm) & log2FC.L136 < 0 & p.adj.L136 < 0.05 & !is.na(p.adj.L136), 
+                         "Consensus negative", group)) %>%
+  mutate(group = plyr::mapvalues(group, from = c("other"), to = c(NA)))
+
+df.deg.compare.CC <- df.deg.compare.CC %>%
+  mutate(group = if_else(abs(log2FC.HypNorm) < 0.5 & p.adj.L136 < 0.05 & !is.na(p.adj.L136) & log2FC.L136 > 0, 
+                         "Absence in HypNorm : TRACER positive", "other")) %>%
+  mutate(group = if_else(abs(log2FC.HypNorm) < 0.5 & p.adj.L136 < 0.05 & !is.na(p.adj.L136) & log2FC.L136 < 0, 
+                         "Absence in HypNorm : TRACER negative", group)) %>%
+  mutate(group = if_else(abs(log2FC.L136) < 0.5 & p.adj.HypNorm < 0.05 & !is.na(p.adj.HypNorm) & log2FC.HypNorm > 0, 
+                         "Absence in TRACER : HypNorm positive", group)) %>%
+  mutate(group = if_else(abs(log2FC.L136) < 0.5 & p.adj.HypNorm < 0.05 & !is.na(p.adj.HypNorm) & log2FC.HypNorm < 0, 
+                         "Absence in TRACER : HypNorm negative", group)) %>%
+  mutate(group = if_else(log2FC.HypNorm > 0 & p.adj.HypNorm < 0.05 & !is.na(p.adj.HypNorm) & log2FC.L136 < 0 & p.adj.L136 < 0.05 & !is.na(p.adj.L136), 
+                         "HypNorm positive : TRACER negative", group)) %>%
+  mutate(group = if_else(log2FC.HypNorm < 0 & p.adj.HypNorm < 0.05 & !is.na(p.adj.HypNorm) & log2FC.L136 > 0 & p.adj.L136 < 0.05 & !is.na(p.adj.L136), 
+                         "HypNorm negative : TRACER positive", group)) %>%
+  mutate(group = if_else(log2FC.HypNorm > 0 & p.adj.HypNorm < 0.05 & !is.na(p.adj.HypNorm) & log2FC.L136 > 0 & p.adj.L136 < 0.05 & !is.na(p.adj.L136), 
+                         "Consensus positive", group)) %>%
+  mutate(group = if_else(log2FC.HypNorm < 0 & p.adj.HypNorm < 0.05 & !is.na(p.adj.HypNorm) & log2FC.L136 < 0 & p.adj.L136 < 0.05 & !is.na(p.adj.L136), 
+                         "Consensus negative", group)) %>%
+  mutate(group = plyr::mapvalues(group, from = c("other"), to = c(NA)))
+
+df.deg.compare.L136 <- df.deg.compare.L136 %>%
+  mutate(group = if_else(abs(log2FC.MC) < 0.5 & p.adj.CC < 0.05 & !is.na(p.adj.CC) & log2FC.CC > 0, 
+                         "Absence in MC : CC positive", "other")) %>%
+  mutate(group = if_else(abs(log2FC.MC) < 0.5 & p.adj.CC < 0.05 & !is.na(p.adj.CC) & log2FC.CC < 0, 
+                         "Absence in MC : CC negative", group)) %>%
+  mutate(group = if_else(abs(log2FC.CC) < 0.5 & p.adj.MC < 0.05 & !is.na(p.adj.MC) & log2FC.MC > 0, 
+                         "Absence in CC : MC positive", group)) %>%
+  mutate(group = if_else(abs(log2FC.CC) < 0.5 & p.adj.MC < 0.05 & !is.na(p.adj.MC) & log2FC.MC < 0, 
+                         "Absence in CC : MC negative", group)) %>%
+  mutate(group = if_else(log2FC.MC > 0 & p.adj.MC < 0.05 & !is.na(p.adj.MC) & log2FC.CC < 0 & p.adj.CC < 0.05 & !is.na(p.adj.CC), 
+                         "MC positive : CC negative", group)) %>%
+  mutate(group = if_else(log2FC.MC < 0 & p.adj.MC < 0.05 & !is.na(p.adj.MC) & log2FC.CC > 0 & p.adj.CC < 0.05 & !is.na(p.adj.CC), 
+                         "MC negative : CC positive", group)) %>%
+  mutate(group = if_else(log2FC.MC > 0 & p.adj.MC < 0.05 & !is.na(p.adj.MC) & log2FC.CC > 0 & p.adj.CC < 0.05 & !is.na(p.adj.CC), 
+                         "Consensus positive", group)) %>%
+  mutate(group = if_else(log2FC.MC < 0 & p.adj.MC < 0.05 & !is.na(p.adj.MC) & log2FC.CC < 0 & p.adj.CC < 0.05 & !is.na(p.adj.CC), 
+                         "Consensus negative", group)) %>%
+  mutate(group = plyr::mapvalues(group, from = c("other"), to = c(NA)))
+
+df.deg.compare.hypnorm <- df.deg.compare.hypnorm %>%
+  mutate(group = if_else(abs(log2FC.MC) < 0.5 & p.adj.CC < 0.05 & !is.na(p.adj.CC) & log2FC.CC > 0, 
+                         "Absence in MC : CC positive", "other")) %>%
+  mutate(group = if_else(abs(log2FC.MC) < 0.5 & p.adj.CC < 0.05 & !is.na(p.adj.CC) & log2FC.CC < 0, 
+                         "Absence in MC : CC negative", group)) %>%
+  mutate(group = if_else(abs(log2FC.CC) < 0.5 & p.adj.MC < 0.05 & !is.na(p.adj.MC) & log2FC.MC > 0, 
+                         "Absence in CC : MC positive", group)) %>%
+  mutate(group = if_else(abs(log2FC.CC) < 0.5 & p.adj.MC < 0.05 & !is.na(p.adj.MC) & log2FC.MC < 0, 
+                         "Absence in CC : MC negative", group)) %>%
+  mutate(group = if_else(log2FC.MC > 0 & p.adj.MC < 0.05 & !is.na(p.adj.MC) & log2FC.CC < 0 & p.adj.CC < 0.05 & !is.na(p.adj.CC), 
+                         "MC positive : CC negative", group)) %>%
+  mutate(group = if_else(log2FC.MC < 0 & p.adj.MC < 0.05 & !is.na(p.adj.MC) & log2FC.CC > 0 & p.adj.CC < 0.05 & !is.na(p.adj.CC), 
+                         "MC negative : CC positive", group)) %>%
+  mutate(group = if_else(log2FC.MC > 0 & p.adj.MC < 0.05 & !is.na(p.adj.MC) & log2FC.CC > 0 & p.adj.CC < 0.05 & !is.na(p.adj.CC), 
+                         "Consensus positive", group)) %>%
+  mutate(group = if_else(log2FC.MC < 0 & p.adj.MC < 0.05 & !is.na(p.adj.MC) & log2FC.CC < 0 & p.adj.CC < 0.05 & !is.na(p.adj.CC), 
+                         "Consensus negative", group)) %>%
+  mutate(group = plyr::mapvalues(group, from = c("other"), to = c(NA)))
+```
+
+```{r}
+genes.hypoxia <- readRDS("genelists.rds")[["CURATED_HYPOXIA"]]
+```
+
+```{r}
+df.deg.compare.MC <- df.deg.compare.MC %>%
+  mutate(gene.name = plyr::mapvalues(gene, from = annotables::grch38$ensgene, to = annotables::grch38$symbol, warn_missing = F))
+df.deg.compare.CC <- df.deg.compare.CC %>%
+  mutate(gene.name = plyr::mapvalues(gene, from = annotables::grch38$ensgene, to = annotables::grch38$symbol, warn_missing = F))
+
+df.deg.compare.L136 <- df.deg.compare.L136 %>%
+  mutate(gene.name = plyr::mapvalues(gene, from = annotables::grch38$ensgene, to = annotables::grch38$symbol, warn_missing = F))
+df.deg.compare.hypnorm <- df.deg.compare.hypnorm %>%
+  mutate(gene.name = plyr::mapvalues(gene, from = annotables::grch38$ensgene, to = annotables::grch38$symbol, warn_missing = F))
+
+################################################
+
+df.deg.compare.MC <- df.deg.compare.MC %>%
+  mutate(hypoxia = gene.name %in% genes.hypoxia) %>%
+  mutate(hypoxia.gene = ifelse(hypoxia, gene.name, NA))
+df.deg.compare.CC <- df.deg.compare.CC %>%
+  mutate(hypoxia = gene.name %in% genes.hypoxia) %>%
+  mutate(hypoxia.gene = ifelse(hypoxia, gene.name, NA))
+
+df.deg.compare.L136 <- df.deg.compare.L136 %>%
+  mutate(hypoxia = gene.name %in% genes.hypoxia) %>%
+  mutate(hypoxia.gene = ifelse(hypoxia, gene.name, NA))
+df.deg.compare.hypnorm <- df.deg.compare.hypnorm %>%
+  mutate(hypoxia = gene.name %in% genes.hypoxia) %>%
+  mutate(hypoxia.gene = ifelse(hypoxia, gene.name, NA))
+
+################################################
+
+df.deg.compare.MC <- df.deg.compare.MC %>%
+  group_by(group) %>%
+  mutate(top.gene.rank = rank(-pmax(abs(log2FC.L136), abs(log2FC.HypNorm)))) %>%
+  mutate(top.gene = ifelse(top.gene.rank < 11, gene.name, NA)) %>%
+  ungroup()
+df.deg.compare.CC <- df.deg.compare.CC %>%
+  group_by(group) %>%
+  mutate(top.gene.rank = rank(-pmax(abs(log2FC.L136), abs(log2FC.HypNorm)))) %>%
+  mutate(top.gene = ifelse(top.gene.rank < 11, gene.name, NA)) %>%
+  ungroup()
+
+df.deg.compare.L136 <- df.deg.compare.L136 %>%
+  group_by(group) %>%
+  mutate(top.gene.rank = rank(-pmax(abs(log2FC.MC), abs(log2FC.CC)))) %>%
+  mutate(top.gene = ifelse(top.gene.rank < 11, gene.name, NA)) %>%
+  ungroup()
+df.deg.compare.hypnorm <- df.deg.compare.hypnorm %>%
+  group_by(group) %>%
+  mutate(top.gene.rank = rank(-pmax(abs(log2FC.MC), abs(log2FC.CC)))) %>%
+  mutate(top.gene = ifelse(top.gene.rank < 11, gene.name, NA)) %>%
+  ungroup()
+```
+
+### save df.deg.compare
+
+```{r}
+saveRDS(object = rbind(df.deg.compare.MC, df.deg.compare.CC), file = "DESeq2_proteincoding_DEGs-comparison-Org-L136vsHypNorm.rds")
+saveRDS(object = rbind(df.deg.compare.L136, df.deg.compare.hypnorm), file = "DESeq2_proteincoding_DEGs-comparison-Org-MCvsCC.rds")
+```
+
+### create custom color pallette for gene sets
+
+```{r}
+tracer.geneset.pal <- RColorBrewer::brewer.pal(length(unique(df.deg.compare.MC$group))-1, "Set1")
+names(tracer.geneset.pal) <- unique(df.deg.compare.MC$group)[2:9]
+```
+
+### plot L136 vs. HypNorm
+
+```{r}
+df.deg.compare.MC <- readRDS("DESeq2_proteincoding_DEGs-comparison-Org-L136vsHypNorm.rds") |> filter(sample.type == "MC")
+df.deg.compare.CC <- readRDS("DESeq2_proteincoding_DEGs-comparison-Org-L136vsHypNorm.rds") |> filter(sample.type == "CC")
+```
+
+```{r}
+old_groups = c("Absence in HypNorm : TRACER positive",
+               "Absence in HypNorm : TRACER negative",
+               "Absence in TRACER : HypNorm positive",
+               "Absence in TRACER : HypNorm negative",
+               "HypNorm negative : TRACER positive",
+               "HypNorm positive : TRACER negative",
+               "Consensus positive",
+               "Consensus negative")
+new_groups = c("TRACER-only up",
+               "TRACER-only down",
+               "Hypoxia-only up",
+               "Hypoxia-only down",
+               "Hypoxia down : TRACER up",
+               "Hypoxia up : TRACER down",
+               "Consensus up",
+               "Consensus down")
+
+df.deg.compare.MC <- df.deg.compare.MC |>
+  mutate(group = plyr::mapvalues(group, from = old_groups, to = new_groups))
+df.deg.compare.CC <- df.deg.compare.CC |>
+  mutate(group = plyr::mapvalues(group, from = old_groups, to = new_groups))
+
+rm(old_groups, new_groups)
+```
+
+```{r}
+p <- df.deg.compare.MC |>
+  filter(group == "TRACER-only up") |>
+  #filter(!is.na(p.adj.L136) & p.adj.HypNorm < 0.01) |>
+  filter(!is.na(p.adj.HypNorm) & p.adj.L136 < 0.01) |>
+  mutate(`TRACER layer 6` = log2FC.L136, Hypoxia = log2FC.HypNorm) |>
+  ggpaired(cond1 = "TRACER layer 6",
+           cond2 = "Hypoxia",
+           color = "condition",
+           line.color = "grey",
+           line.size = 0.1,
+           linetype = "solid",
+           #point.size = 1.2,
+           palette = "npg",
+           xlab = NULL,
+           ylab = "log2FC") +
+  #ylim(NA, 5) +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  stat_compare_means(paired = TRUE) + 
+  theme(axis.title.x = element_blank())
+p
+ggsave("figure-s3c-right.pdf", device = "pdf", width = 4, height = 5, units = "in")
+```
+
+```{r}
+ggplot(data = df.deg.compare.MC, 
+       mapping = aes(x = log2FC.HypNorm, y = log2FC.L136, label = top.gene)) + 
+  geom_point(aes(color = group, alpha = -log(p.adj.L136))) + 
+  scale_color_manual(values = tracer.geneset.pal) +
+  #geom_label_repel(show.legend = F, max.overlaps = 200, alpha = 1, arrow = arrow(type = "closed", angle = 20, length = unit(0.08, "inches"))) +
+  #scale_x_continuous(trans = 'log2') +
+  geom_abline(color = "red", linetype = "dashed", alpha = 0.4) +
+  geom_hline(yintercept = 0, color = "blue", linetype = "dashed", alpha = 0.4) +
+  geom_vline(xintercept = 0, color = "blue", linetype = "dashed", alpha = 0.4) +
+  labs(color ="Group", 
+       alpha = bquote(-log~(TRACER~p[adj])),
+       x = bquote(log[2]~(fold~change)~Hypoxia),
+       y = bquote(log[2]~(fold~change)~TRACER)) + 
+  xlim(-3, 4) +
+  ylim(-3, 4) +
+  theme_pubr(legend = "right")
+  #theme(legend.position = c(0.81, 0.5))
+ggsave("figure-3c.pdf", device = "pdf", width = 8, height = 5, units = "in")
+
+ggplot(data = df.deg.compare.CC, 
+       mapping = aes(x = log2FC.HypNorm, y = log2FC.L136, label = top.gene)) + 
+  geom_point(aes(color = group, alpha = -log(p.adj.L136))) + 
+  scale_color_manual(values = tracer.geneset.pal) +
+  xlim(-4, 4) +
+  ylim(-4, 4) +
+  #geom_label_repel(show.legend = F, max.overlaps = 200, alpha = 1, arrow = arrow(type = "closed", angle = 20, length = unit(0.08, "inches"))) +
+  #scale_x_continuous(trans = 'log2') +
+  geom_abline(color = "red", linetype = "dashed", alpha = 0.4) +
+  geom_hline(yintercept = 0, color = "blue", linetype = "dashed", alpha = 0.4) +
+  geom_vline(xintercept = 0, color = "blue", linetype = "dashed", alpha = 0.4) +
+  labs(color ="Group", 
+       alpha = bquote(-log~(TRACER~p[adj])),
+       x = bquote(log[2]~(fold~change)~Hypoxia),
+       y = bquote(log[2]~(fold~change)~TRACER)) +
+  theme_pubr(legend = "right")
+  #theme(legend.position = c(0.81, 0.5))
+ggsave("figure-4c.pdf", device = "pdf", width = 8, height = 5, units = "in")
+```
+
+### create custom color pallette for gene sets
+
+```{r}
+tracer.geneset.pal <- RColorBrewer::brewer.pal(length(unique(df.deg.compare.L136$group))-1, "Set1")
+names(tracer.geneset.pal) <- unique(df.deg.compare.L136$group)[2:8]
+```
+
+### plot L136 vs. HypNorm
+
+```{r}
+df.deg.compare.L136 <- readRDS("DESeq2_proteincoding_DEGs-comparison-Org-MCvsCC.rds") |> filter(condition == "L136")
+```
+
+```{r}
+old_groups = c("Absence in CC : MC positive",
+               "Absence in CC : MC negative",
+               "Absence in MC : CC positive",
+               "Absence in MC : CC negative",
+               "MC negative : CC positive",
+               "MC positive : CC negative",
+               "Consensus positive",
+               "Consensus negative")
+new_groups = c("MC-only up",
+               "MC-only down",
+               "CC-only up",
+               "CC-only down",
+               "MC down : CC up",
+               "MC up : CC down",
+               "Consensus up",
+               "Consensus down")
+
+df.deg.compare.L136 <- df.deg.compare.L136 |>
+  mutate(group = plyr::mapvalues(group, from = old_groups, to = new_groups))
+
+rm(old_groups, new_groups)
+```
+
+### plot MC vs. CC
+
+```{r}
+ggplot(data = df.deg.compare.L136, 
+       mapping = aes(x = log2FC.MC, y = log2FC.CC, label = top.gene)) + 
+  geom_point(aes(color = group, alpha = -log(p.adj.CC))) + 
+  scale_color_manual(values = tracer.geneset.pal) +
+  xlim(-3, 3) +
+  ylim(-3, 3) +
+  #geom_label_repel(show.legend = F, max.overlaps = 200, alpha = 1, arrow = arrow(type = "closed", angle = 20, length = unit(0.08, "inches"))) +
+  #scale_x_continuous(trans = 'log2') +
+  geom_abline(color = "red", linetype = "dashed", alpha = 0.4) +
+  geom_hline(yintercept = 0, color = "blue", linetype = "dashed", alpha = 0.4) +
+  geom_vline(xintercept = 0, color = "blue", linetype = "dashed", alpha = 0.4) +
+  labs(color ="Gene set", 
+       alpha = bquote(-log~(Co-culture~p[adj])),
+       x = bquote(log[2]~(fold~change)~Monoculture),
+       y = bquote(log[2]~(fold~change)~Co-culture)) +
+  theme_pubr(legend = "right")
+ggsave("figure-5c.pdf", device = "pdf", width = 8, height = 5, units = "in")
+```

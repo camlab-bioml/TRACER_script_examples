@@ -1,0 +1,954 @@
+---
+title: "TRACER ORA barplots"
+format: html
+editor: visual
+---
+
+```{r}
+#| label: load-packages
+#| include: false
+suppressPackageStartupMessages({
+library(ggplot2)
+library(readxl)
+library(dplyr)
+})
+```
+
+# read plot 3 data
+
+```{r}
+# Read the Excel file - third worksheet
+ora_data <- read_excel("./ORA_ORG_all.xlsx", sheet = 3)
+
+names(ora_data) <- ora_data[1,]
+ora_data <- ora_data[-1, ]
+
+str(ora_data$pvalue)
+str(ora_data$p.adjust)
+str(ora_data$qvalue)
+
+ora_data$p.adjust <- as.numeric(ora_data$p.adjust)
+ora_data$pvalue <- as.numeric(ora_data$pvalue)
+ora_data$qvalue <- as.numeric(ora_data$qvalue)
+
+ora_data$Description <- plyr::mapvalues(ora_data$Description, from = c("HYPOXIA"), to = c("CURATED_HYPOXIA"))
+```
+
+# p3 helper function
+
+```{r}
+###############################
+# Function to prepare pathway data
+###############################
+prepare_pathway_data <- function(quadrant_group, excel_data) {
+  # Filter data for the relevant quadrant
+  data_subset <- excel_data %>%
+    filter(grepl(quadrant_group, group, fixed = TRUE))
+  
+  # Calculate -log10(p.adjust) and prepare data for plotting
+  plot_data <- data_subset %>%
+    mutate(
+      pathway = sub("^(GOBP_|HALLMARK_|KEGG_)", "", Description),
+      #pathway = sub("\\d+$", "", pathway),  # Remove trailing numbers
+      neg_log_p = -log10(p.adjust)
+    ) %>%
+    arrange(desc(neg_log_p))
+  
+  return(plot_data)
+}
+```
+
+# plot 3d
+
+```{r}
+###############################
+# Plot d: Consensus positive and negative
+###############################
+# Prepare data for plot d
+plot_d_pos <- prepare_pathway_data("MC-Consensus positive", ora_data)
+plot_d_neg <- prepare_pathway_data("MC-Consensus negative", ora_data)
+
+# Select top pathways for "Consensus positive"
+top_pos_pathways <- c(
+  "HYPOXIA",
+  "CURATED_HYPOXIA",  # You may need to adjust this based on actual data
+  "TRANSMEMBRANE_RECEPTOR_PROTEIN_TYROSINE_KINASE_SIGNALING_PATHWAY", # For TK_SIGNALING
+  "HEME_METABOLISM",  # For HEME_MTB
+  "EPITHELIAL_CELL_DIFFERENTIATION"  # For EPITHELIAL_CELL_DIFF
+)
+
+# Create dataframe for positive pathways
+plot_d_pos_selected <- plot_d_pos %>%
+  filter(pathway %in% top_pos_pathways) %>%
+  arrange(desc(neg_log_p)) %>%
+  head(5)
+
+# Handle long pathway names
+plot_d_pos_selected <- plot_d_pos_selected %>%
+  mutate(
+    short_name = case_when(
+      #grepl("HYPOXIA", pathway) ~ "HYPOXIA",
+      #grepl("CURATED_HYPOXIA", pathway) ~ "CURATED_HYPOXIA", 
+      grepl("TYROSINE_KINASE", pathway) ~ "TK_SIGNALING",
+      grepl("HEME", pathway) ~ "HEME_MTB",
+      grepl("EPITHELIAL_CELL_DIFFERENTIATION", pathway) ~ "EPITHELIAL_CELL_DIFF",
+      TRUE ~ pathway
+    )
+  )
+
+# Select top pathways for "Consensus negative"
+top_neg_pathways <- c(
+  "E2F_TARGETS",
+  "AEROBIC_RESPIRATION",
+  "OXIDATIVE_PHOSPHORYLATION",  # For OXPHOS
+  "RIBONUCLEOPROTEIN_COMPLEX_BIOGENESIS",  # For RIBONUCLEOPROTEIN_BIOGENESIS
+  "MYC_TARGETS_V2"  # For MYC_TARGETSV2
+)
+
+# Create dataframe for negative pathways
+plot_d_neg_selected <- plot_d_neg %>%
+  filter(pathway %in% top_neg_pathways) %>%
+  arrange(desc(neg_log_p)) %>%
+  filter(Description != "KEGG_OXIDATIVE_PHOSPHORYLATION") %>%
+  head(5)
+
+# Handle long pathway names
+plot_d_neg_selected <- plot_d_neg_selected %>%
+  mutate(
+    short_name = case_when(
+      grepl("E2F_TARGETS", pathway) ~ "E2F_TARGETS",
+      grepl("AEROBIC_RESPIRATION", pathway) ~ "AEROBIC_RESPIRATION",
+      grepl("OXIDATIVE_PHOSPHORYLATION", pathway) ~ "OXPHOS",
+      grepl("RIBONUCLEOPROTEIN", pathway) ~ "RIBONUCLEOPROTEIN_BIOGENESIS",
+      grepl("MYC_TARGETS", pathway) ~ "MYC_TARGETSV2",
+      TRUE ~ pathway
+    )
+  )
+
+# Combine data for plot d and set factor levels to control the order
+plot_d_data <- bind_rows(
+  mutate(plot_d_pos_selected, group = "Consensus up"),
+  mutate(plot_d_neg_selected, group = "Consensus down")
+) %>%
+  mutate(short_name = factor(short_name, levels = rev(unique(short_name))))
+
+
+
+# Create Plot e
+plot_d <- ggplot(plot_d_data, aes(x = neg_log_p, y = short_name, fill = group)) +
+  geom_bar(stat = "identity") +
+  geom_vline(xintercept = -log10(0.05), linetype = "dashed") +
+  scale_fill_manual(values = c("Consensus up" = "#4cae49", 
+                               "Consensus down" = "#fe7e01"),
+                    name = "Quadrant") +
+  labs(
+    x = "-log10(p.adjust)",
+    y = ""
+  ) +
+  theme_minimal() +
+  theme(
+    legend.position = "top",
+    panel.grid.major.y = element_blank()
+  )
+plot_d
+
+rm(plot_d_neg, plot_d_pos, plot_d_neg_selected, plot_d_pos_selected, top_neg_pathways, top_pos_pathways)
+```
+
+# plot 3e
+
+```{r}
+###############################
+# Plot e: Absence in HypNorm
+###############################
+# Prepare data for plot e
+plot_e_pos <- prepare_pathway_data("MC-Absence in HypNorm : TRACER positive", ora_data)
+plot_e_neg <- prepare_pathway_data("MC-Absence in HypNorm : TRACER negative", ora_data)
+
+# Select top pathways for "Absence in HypNorm : TRACER positive"
+top_pos_pathways_e <- c(
+  "VESICLE_ORGANIZATION",
+  "PROTEIN_SECRETION",
+  "UNFOLDED_PROTEIN_RESPONSE",  # For UPR
+  "SNARE_INTERACTIONS_IN_VESICULAR_TRANSPORT",  # For SNARE_INTERACTIONS
+  "PI3K_AKT_MTOR_SIGNALING"     # For PI3K/AKT/MTOR_SIGNALING
+)
+
+# Create dataframe for positive pathways
+plot_e_pos_selected <- plot_e_pos %>%
+  filter(pathway %in% top_pos_pathways_e) %>%
+  arrange(desc(neg_log_p)) %>%
+  filter(ID != "HALLMARK_UNFOLDED_PROTEIN_RESPONSE2")
+
+# Handle long pathway names
+plot_e_pos_selected <- plot_e_pos_selected %>%
+  mutate(
+    short_name = case_when(
+      grepl("VESICLE_ORGANIZATION", pathway) ~ "MACROAUTOPHAGY",
+      grepl("PROTEIN_SECRETION", pathway) ~ "PROTEIN_SECRETION",
+      grepl("UNFOLDED_PROTEIN", pathway) ~ "UPR",
+      grepl("SNARE", pathway) ~ "SNARE_INTERACTIONS",
+      grepl("PI3K_AKT_MTOR", pathway) ~ "PI3K/AKT/MTOR_SIGNALING",
+      TRUE ~ pathway
+    )
+  )
+
+# Select top pathways for "Absence in HypNorm : TRACER negative"
+top_neg_pathways_e <- c(
+  "STEROID_METABOLIC_PROCESS",  # For STEROID_MTB
+  "ESTROGEN_RESPONSE_EARLY",
+  "ESTROGEN_RESPONSE_LATE",
+  "BUTANOATE_METABOLISM",      # For BUTANOATE_MTB
+  "RETINOL_METABOLISM",        # For RETINOL_MTB
+  "DRUG_METABOLISM"            # For DRUG_MTB
+)
+
+# Create dataframe for negative pathways
+plot_e_neg_selected <- plot_e_neg %>%
+  filter(
+    grepl("STEROID_METABOLIC", pathway) |
+    grepl("ESTROGEN_RESPONSE_EARLY", pathway) |
+    grepl("ESTROGEN_RESPONSE_LATE", pathway) |
+    grepl("BUTANOATE", pathway) |
+    grepl("RETINOL", pathway) |
+    grepl("DRUG_METABOLISM", pathway)
+  ) %>%
+  arrange(desc(neg_log_p)) %>%
+  head(6)
+
+# Handle long pathway names
+plot_e_neg_selected <- plot_e_neg_selected %>%
+  mutate(
+    short_name = case_when(
+      grepl("STEROID_METABOLIC", pathway) ~ "STEROID_MTB",
+      grepl("ESTROGEN_RESPONSE_EARLY", pathway) ~ "ESTROGEN_RESPONSE_EARLY",
+      grepl("ESTROGEN_RESPONSE_LATE", pathway) ~ "ESTROGEN_RESPONSE_LATE",
+      grepl("BUTANOATE", pathway) ~ "BUTANOATE_MTB",
+      grepl("RETINOL", pathway) ~ "RETINOL_MTB",
+      grepl("DRUG_METABOLISM", pathway) ~ "DRUG_MTB",
+      TRUE ~ pathway
+    )
+  )
+
+# Combine data for plot e and set factor levels to control the order
+plot_e_data <- bind_rows(
+  mutate(plot_e_pos_selected, group = "TRACER-only up"),
+  mutate(plot_e_neg_selected, group = "TRACER-only down")
+) %>%
+  mutate(short_name = factor(short_name, levels = rev(unique(short_name))))
+
+# Create Plot e
+plot_e <- ggplot(plot_e_data, aes(x = neg_log_p, y = short_name, fill = group)) +
+  geom_bar(stat = "identity") +
+  geom_vline(xintercept = -log10(0.05), linetype = "dashed") +
+  scale_fill_manual(values = c("TRACER-only up" = "#8B5FBF", 
+                               "TRACER-only down" = "#CD5C5C"),
+                    name = "Quadrant") +
+  labs(
+    x = "-log10(p.adjust)",
+    y = ""
+  ) +
+  theme_minimal() +
+  theme(
+    legend.position = "top",
+    panel.grid.major.y = element_blank()
+  )
+plot_e
+
+rm(plot_e_neg, plot_e_pos, plot_e_neg_selected, plot_e_pos_selected, top_neg_pathways_e, top_pos_pathways_e)
+```
+
+# save plots
+
+```{r}
+ggsave("figure-3d.pdf", plot_d, width = 6, height = 3)
+ggsave("figure-3e.pdf", plot_e, width = 6, height = 3)
+```
+
+# read plot 4 data
+
+```{r}
+# Read the Excel file - first worksheet
+ora_data <- read_excel("./ORA_ORG_all.xlsx", sheet = 1)
+
+# Process the dataframe to handle the structure
+names(ora_data) <- unlist(ora_data[2, ])
+# Remove the 2nd rows that contain headers
+ora_data <- ora_data[-c(2), ]
+
+ora_data <- ora_data[,-c(1)] 
+
+# Convert numeric columns to proper numeric type
+ora_data$pvalue <- as.numeric(ora_data$pvalue)
+ora_data$p.adjust <- as.numeric(ora_data$p.adjust)
+ora_data$qvalue <- as.numeric(ora_data$qvalue)
+
+# Function to clean pathway names by removing prefixes
+clean_pathway_name <- function(pathway) {
+  gsub("^(GOBP_|HALLMARK_|KEGG_)", "", pathway)
+}
+
+# Apply the cleaning function to the Description column
+ora_data$Description <- plyr::mapvalues(ora_data$Description, from = c("HYPOXIA"), to = c("CURATED_HYPOXIA"))
+ora_data$Description_clean <- clean_pathway_name(ora_data$Description)
+```
+
+# p4 helper function
+
+```{r}
+###############################
+# Function to prepare pathway data
+###############################
+prepare_pathway_data <- function(quadrant_pattern, excel_data) {
+  # Filter data for the relevant quadrant
+  data_subset <- excel_data %>%
+    filter(grepl(quadrant_pattern, group, fixed = TRUE))
+  
+  # Calculate -log10(p.adjust) and prepare data for plotting
+  plot_data <- data_subset %>%
+    mutate(
+      pathway = Description_clean,
+      neg_log_p = -log10(p.adjust)
+    ) %>%
+    arrange(desc(neg_log_p))
+  
+  return(plot_data)
+}
+```
+
+# plot 4d
+
+```{r}
+###############################
+# Plot d: Consensus positive and negative
+###############################
+# Prepare data for plot d
+plot_d_pos <- prepare_pathway_data("CC-Consensus positive", ora_data)
+plot_d_neg <- prepare_pathway_data("CC-Consensus negative", ora_data)
+
+# Define top pathways for "Consensus positive" based on the screenshot
+top_pos_pathways_d <- c(
+  "CURATED_HYPOXIA",
+  "HYPOXIA",
+  "GLYCOLYSIS",
+  "MTORC1_SIGNALING",
+  "HEME_MTB"
+)
+
+# Map the cleaned pathways to the desired display names
+pathway_mapping_d_pos <- list(
+  "HYPOXIA" = "HYPOXIA",
+  "CURATED_HYPOXIA" = "CURATED_HYPOXIA",
+  "GLYCOLYTIC_PROCESS" = "GLYCOLYSIS",
+  "GLYCOLYSIS" = "GLYCOLYSIS",
+  "MTORC1_SIGNALING" = "MTORC1_SIGNALING",
+  "HEME_METABOLISM" = "HEME_MTB"
+)
+
+# Create dataframe for positive pathways
+plot_d_pos_selected <- plot_d_pos %>%
+  filter(pathway %in% names(pathway_mapping_d_pos)) %>%
+  arrange(desc(neg_log_p)) %>%
+  mutate(
+    short_name = sapply(pathway, function(p) {
+      pathway_mapping_d_pos[[p]]
+    })
+  ) %>%
+  group_by(short_name) %>%
+  slice(1) %>%  # Take the top pathway if multiple match
+  ungroup() %>%
+  arrange(desc(neg_log_p))
+
+# Define top pathways for "Consensus negative" based on the screenshot
+top_neg_pathways_d <- c(
+  "E2F_TARGETS",
+  "NUCLEAR_DIVISION",
+  "CHROMOSOME_SEGREGATION",
+  "ORGANELLE_FISSION",
+  "G2M_CHECKPOINT"
+)
+
+# Map the cleaned pathways to the desired display names
+pathway_mapping_d_neg <- list(
+  "E2F_TARGETS" = "E2F_TARGETS",
+  "MITOTIC_NUCLEAR_DIVISION" = "NUCLEAR_DIVISION", 
+  "CHROMOSOME_SEGREGATION" = "CHR_SEGREGATION",
+  "ORGANELLE_FISSION" = "ORGANELLE_FISSION",
+  "G2M_CHECKPOINT" = "G2M_CHECKPOINT"
+)
+
+# Create dataframe for negative pathways
+plot_d_neg_selected <- plot_d_neg %>%
+  filter(pathway %in% names(pathway_mapping_d_neg)) %>%
+  arrange(desc(neg_log_p)) %>%
+  mutate(
+    short_name = sapply(pathway, function(p) {
+      pathway_mapping_d_neg[[p]]
+    })
+  ) %>%
+  group_by(short_name) %>%
+  slice(1) %>%  # Take the top pathway if multiple match
+  ungroup() %>%
+  arrange(desc(neg_log_p))
+
+# Combine data for plot d and set factor levels to control the order
+plot_d_data <- bind_rows(
+  mutate(plot_d_pos_selected, group = "Consensus up"),
+  mutate(plot_d_neg_selected, group = "Consensus down")
+) %>%
+  mutate(short_name = factor(short_name, levels = rev(c(
+    "CURATED_HYPOXIA", "HYPOXIA", "GLYCOLYSIS", "MTORC1_SIGNALING", "HEME_MTB",
+    "E2F_TARGETS", "NUCLEAR_DIVISION", "CHR_SEGREGATION", "ORGANELLE_FISSION", "G2M_CHECKPOINT"
+  ))))
+
+# Create Plot d
+plot_d <- ggplot(plot_d_data, aes(x = neg_log_p, y = short_name, fill = group)) +
+  geom_bar(stat = "identity") +
+  geom_vline(xintercept = -log10(0.05), linetype = "dashed") +
+  scale_fill_manual(values = c("Consensus up" = "#4cae49", 
+                               "Consensus down" = "#fe7e01"),
+                    name = "Quadrant") +
+  labs(
+    x = "-log10(p.adjust)",
+    y = ""
+  ) +
+  theme_minimal() +
+  theme(
+    legend.position = "top",
+    panel.grid.major.y = element_blank()
+  )
+plot_d
+
+rm(pathway_mapping_d_neg, pathway_mapping_d_pos, plot_d_neg, plot_d_pos, plot_d_neg_selected, plot_d_pos_selected, top_neg_pathways_d, top_pos_pathways_d)
+```
+
+# plot 4e
+
+```{r}
+###############################
+# Plot e: Absence in HypNorm
+###############################
+# Prepare data for plot e
+plot_e_pos <- prepare_pathway_data("CC-Absence in HypNorm : TRACER positive", ora_data)
+plot_e_neg <- prepare_pathway_data("CC-Absence in HypNorm : TRACER negative", ora_data)
+
+# Define top pathways for "Absence in HypNorm : TRACER positive" based on the screenshot
+top_pos_pathways_e <- c(
+  "GOLGI_VESICLE_TRANSPORT",
+  "ER_STRESS",
+  "PROTEIN_SECRETION",
+  "UPR",
+  "MACROAUTOPHAGY"
+)
+
+# Map the cleaned pathways to the desired display names
+pathway_mapping_e_pos <- list(
+  "GOLGI_VESICLE_TRANSPORT" = "GOLGI_VESICLE_TRANS",
+  "RESPONSE_TO_ENDOPLASMIC_RETICULUM_STRESS" = "ER_STRESS",
+  "PROTEIN_SECRETION" = "PROTEIN_SECRETION",
+  "UNFOLDED_PROTEIN_RESPONSE" = "UPR",
+  "MACROAUTOPHAGY" = "MACROAUTOPHAGY"
+)
+
+# Create dataframe for positive pathways
+plot_e_pos_selected <- plot_e_pos %>%
+  filter(pathway %in% names(pathway_mapping_e_pos)) %>%
+  arrange(desc(neg_log_p)) %>%
+  mutate(
+    short_name = sapply(pathway, function(p) {
+      pathway_mapping_e_pos[[p]]
+    })
+  ) %>%
+  group_by(short_name) %>%
+  slice(1) %>%  # Take the top pathway if multiple match
+  ungroup() %>%
+  arrange(desc(neg_log_p))
+
+# Define top pathways for "Absence in HypNorm : TRACER negative" based on the screenshot
+top_neg_pathways_e <- c(
+  "MESENCHYMALCELL_DIFF",
+  "RIBOSOME_BIOGENESIS"
+)
+
+# Map the cleaned pathways to the desired display names
+pathway_mapping_e_neg <- list(
+  "MESENCHYMAL_CELL_DIFFERENTIATION" = "MESENCHYMAL_DIFF",
+  "RIBOSOME_BIOGENESIS" = "RIBO_BIOGENESIS"
+)
+
+# Create dataframe for negative pathways
+plot_e_neg_selected <- plot_e_neg %>%
+  filter(pathway %in% names(pathway_mapping_e_neg)) %>%
+  arrange(desc(neg_log_p)) %>%
+  mutate(
+    short_name = sapply(pathway, function(p) {
+      pathway_mapping_e_neg[[p]]
+    })
+  ) %>%
+  group_by(short_name) %>%
+  slice(1) %>%  # Take the top pathway if multiple match
+  ungroup() %>%
+  arrange(desc(neg_log_p))
+
+# Combine data for plot e and set factor levels to control the order
+plot_e_data <- bind_rows(
+  mutate(plot_e_pos_selected, group = "TRACER-only up"),
+  mutate(plot_e_neg_selected, group = "TRACER-only down")
+) %>%
+  mutate(short_name = factor(short_name, levels = rev(c(
+    "GOLGI_VESICLE_TRANS", "ER_STRESS", "PROTEIN_SECRETION", "UPR", "MACROAUTOPHAGY",
+    "MESENCHYMAL_DIFF", "RIBO_BIOGENESIS"
+  ))))
+
+# Create Plot e
+plot_e <- ggplot(plot_e_data, aes(x = neg_log_p, y = short_name, fill = group)) +
+  geom_bar(stat = "identity") +
+  geom_vline(xintercept = -log10(0.05), linetype = "dashed") +
+  scale_fill_manual(values = c("TRACER-only up" = "#8B5FBF", 
+                              "TRACER-only down" = "#CD5C5C"),
+                    name = "Quadrant") +
+  labs(
+    x = "-log10(p.adjust)",
+    y = ""
+  ) +
+  theme_minimal() +
+  theme(
+    legend.position = "top",
+    panel.grid.major.y = element_blank()
+  )
+plot_e
+
+rm(pathway_mapping_e_neg, pathway_mapping_e_pos, plot_e_neg, plot_e_pos, plot_e_neg_selected, plot_e_pos_selected, top_neg_pathways_e, top_pos_pathways_e)
+```
+
+# plot 4f
+
+```{r}
+###############################
+# Plot f: Absence in TRACER
+###############################
+# Prepare data for plot e
+plot_f_pos <- prepare_pathway_data("CC-Absence in TRACER : HypNorm positive", ora_data)
+plot_f_neg <- prepare_pathway_data("CC-Absence in TRACER : HypNorm negative", ora_data)
+
+# Define top pathways for "Absence in TRACER : HypNorm positive" based on the screenshot
+top_pos_pathways_f <- c(
+  "EXT_ENCAP_STR_ORG",
+  "HYPOXIA",
+  "NEG_REG_PEPTIDASE_ACT",
+  "NEG_REG_HYDROLASE_ACT",
+  "EMT"
+)
+
+# Map the cleaned pathways to the desired display names
+pathway_mapping_f_pos <- list(
+  "EXTERNAL_ENCAPSULATING_STRUCTURE_ORGANIZATION" = "EXT_ENCAP_STR_ORG",
+  "HYPOXIA" = "HYPOXIA",
+  "NEGATIVE_REGULATION_OF_PEPTIDASE_ACTIVITY" = "NEG_REG_PEPTIDASE_ACT",
+  "NEGATIVE_REGULATION_OF_HYDROLASE_ACTIVITY" = "NEG_REG_HYDROLASE_ACT",
+  "EPITHELIAL_MESENCHYMAL_TRANSITION" = "EMT"
+)
+
+# Create dataframe for positive pathways
+plot_f_pos_selected <- plot_f_pos %>%
+  filter(pathway %in% names(pathway_mapping_f_pos)) %>%
+  arrange(desc(neg_log_p)) %>%
+  mutate(
+    short_name = sapply(pathway, function(p) {
+      pathway_mapping_f_pos[[p]]
+    })
+  ) %>%
+  group_by(short_name) %>%
+  slice(1) %>%  # Take the top pathway if multiple match
+  ungroup() %>%
+  arrange(desc(neg_log_p))
+
+# Define top pathways for "Absence in TRACER : HypNorm negative" based on the screenshot
+top_neg_pathways_f <- c(
+  "E2F_TARGETS",
+  "CHR_SEGREGATION",
+  "DNA_REPLICATION",
+  "G2M_CHECKPOINT",
+  "CELL_CYCLE_DNA_REP"
+)
+
+# Map the cleaned pathways to the desired display names
+pathway_mapping_f_neg <- list(
+  "E2F_TARGETS" = "E2F_TARGETS",
+  "CHROMOSOME_SEGREGATION" = "CHR_SEGREGATION",
+  "DNA_REPLICATION" = "DNA_REPLICATION",
+  "G2M_CHECKPOINT" = "G2M_CHECKPOINT",
+  "CELL_CYCLE_DNA_REPLICATION" = "CELL_CYCLE_DNA_REP"
+)
+
+# Create dataframe for negative pathways
+plot_f_neg_selected <- plot_f_neg %>%
+  filter(pathway %in% names(pathway_mapping_f_neg)) %>%
+  arrange(desc(neg_log_p)) %>%
+  mutate(
+    short_name = sapply(pathway, function(p) {
+      pathway_mapping_f_neg[[p]]
+    })
+  ) %>%
+  group_by(short_name) %>%
+  slice(1) %>%  # Take the top pathway if multiple match
+  ungroup() %>%
+  arrange(desc(neg_log_p))
+
+# Combine data for plot f and set factor levels to control the order
+plot_f_data <- bind_rows(
+  mutate(plot_f_pos_selected, group = "Hypoxia-only up"),
+  mutate(plot_f_neg_selected, group = "Hypoxia-only down")
+) %>%
+  mutate(short_name = factor(short_name, levels = rev(c(
+    top_pos_pathways_f,
+    top_neg_pathways_f
+  ))))
+
+# Create Plot f
+plot_f <- ggplot(plot_f_data, aes(x = neg_log_p, y = short_name, fill = group)) +
+  geom_bar(stat = "identity") +
+  geom_vline(xintercept = -log10(0.05), linetype = "dashed") +
+  scale_fill_manual(values = c("Hypoxia-only up" = "#5994c4", 
+                              "Hypoxia-only down" = "#ffff56"),
+                    name = "Quadrant") +
+  labs(
+    x = "-log10(p.adjust)",
+    y = ""
+  ) +
+  theme_minimal() +
+  theme(
+    legend.position = "top",
+    panel.grid.major.y = element_blank()
+  )
+plot_f
+
+rm(pathway_mapping_f_neg, pathway_mapping_f_pos, plot_f_neg, plot_f_pos, plot_f_neg_selected, plot_f_pos_selected, top_neg_pathways_f, top_pos_pathways_f)
+```
+
+# save plots
+
+```{r}
+# Save the plots as PDF files
+ggsave("figure-4d.pdf", plot_d, width = 6, height = 4)
+ggsave("figure-4e.pdf", plot_e, width = 6, height = 4)
+ggsave("figure-4f.pdf", plot_f, width = 6, height = 4)
+```
+
+# read plot 5 data
+
+```{r}
+# Read the Excel file - second worksheet
+ora_data <- read_excel("./ORA_ORG_all.xlsx", sheet = 2)
+
+# Process the dataframe to handle the structure
+# First, identify column names from the headers
+if ("ID" %in% names(ora_data)) {
+  # Column names already set correctly
+  names(ora_data) <- names(ora_data)
+} else {
+  # Find the row with column headers (usually row 2 or 3)
+  for (i in 1:5) {
+    if (any(grepl("ID", ora_data[i,]))) {
+      col_names <- unlist(ora_data[i, ])
+      names(ora_data) <- col_names
+      ora_data <- ora_data[-c(1:i), ]
+      break
+    }
+  }
+}
+rm(col_names, i)
+
+ora_data <- ora_data[,-c(1)]
+
+# Convert numeric columns to proper numeric type
+ora_data$pvalue <- as.numeric(ora_data$pvalue)
+ora_data$p.adjust <- as.numeric(ora_data$p.adjust)
+ora_data$qvalue <- as.numeric(ora_data$qvalue)
+
+# Function to clean pathway names by removing prefixes
+clean_pathway_name <- function(pathway) {
+  gsub("^(GOBP_|HALLMARK_|KEGG_)", "", pathway)
+}
+
+# Apply the cleaning function to the Description column
+ora_data$Description <- plyr::mapvalues(ora_data$Description, from = c("HYPOXIA"), to = c("CURATED_HYPOXIA"))
+ora_data$Description_clean <- clean_pathway_name(ora_data$Description)
+```
+
+# p5 helper function
+
+```{r}
+###############################
+# Function to prepare pathway data
+###############################
+prepare_pathway_data <- function(quadrant_pattern, excel_data) {
+  # Filter data for the relevant quadrant
+  data_subset <- excel_data %>%
+    filter(grepl(quadrant_pattern, group, fixed = TRUE))
+  
+  # Calculate -log10(p.adjust) and prepare data for plotting
+  plot_data <- data_subset %>%
+    mutate(
+      pathway = Description_clean,
+      neg_log_p = -log10(p.adjust)
+    ) %>%
+    arrange(desc(neg_log_p))
+  
+  return(plot_data)
+}
+```
+
+# plot 5d
+
+```{r}
+###############################
+# Plot d: Consensus positive and negative
+###############################
+# Prepare data for plot d
+plot_d_pos <- prepare_pathway_data("TRACER-Consensus positive", ora_data)
+plot_d_neg <- prepare_pathway_data("TRACER-Consensus negative", ora_data)
+
+# Define top pathways for "Consensus positive" based on the screenshot
+top_pos_pathways_d <- c(
+  "ER_STRESS_RESPONSE",
+  "CURATED_HYPOXIA",
+  "HEME_MTB",
+  "HALLMARK_HYPOXIA",
+  "MTORC1_SIGNALING"
+)
+
+# Map the cleaned pathways to the desired display names
+pathway_mapping_d_pos <- list(
+  "RESPONSE_TO_ER_STRESS" = "ER_STRESS_RESPONSE",
+  "CURATED_HYPOXIA" = "CURATED_HYPOXIA",
+  "HEME_METABOLISM" = "HEME_MTB",
+  "HYPOXIA" = "HALLMARK_HYPOXIA",
+  "MTORC1_SIGNALING" = "MTORC1_SIGNALING"
+)
+
+# Create dataframe for positive pathways
+plot_d_pos_selected <- plot_d_pos %>%
+  filter(pathway %in% names(pathway_mapping_d_pos) | Description_clean %in% names(pathway_mapping_d_pos)) %>%
+  arrange(desc(neg_log_p)) %>%
+  mutate(
+    short_name = sapply(Description_clean, function(p) {
+      if (p %in% names(pathway_mapping_d_pos)) {
+        return(pathway_mapping_d_pos[[p]])
+      } else if (pathway %in% names(pathway_mapping_d_pos)) {
+        return(pathway_mapping_d_pos[[pathway]])
+      } else {
+        return(p)
+      }
+    })
+  ) %>%
+  group_by(short_name) %>%
+  slice(1) %>%  # Take the top pathway if multiple match
+  ungroup() %>%
+  arrange(desc(neg_log_p))
+
+# Define top pathways for "Consensus negative" based on the screenshot
+top_neg_pathways_d <- c(
+  "RIBOSOME_BIOGENESIS",
+  "MYC_TARGETS_V2",
+  "NCRNA_PROCESSING",
+  "E2F_TARGETS",
+  "MYC_TARGETS_V1"
+)
+
+# Map the cleaned pathways to the desired display names
+pathway_mapping_d_neg <- list(
+  "RIBOSOME_BIOGENESIS" = "RIBOSOME_BIOGENESIS",
+  "MYC_TARGETS_V2" = "MYC_TARGETS_V2", 
+  "NCRNA_PROCESSING" = "NCRNA_PROCESSING",
+  "E2F_TARGETS" = "E2F_TARGETS",
+  "MYC_TARGETS_V1" = "MYC_TARGETS_V1"
+)
+
+# Create dataframe for negative pathways
+plot_d_neg_selected <- plot_d_neg %>%
+  filter(pathway %in% names(pathway_mapping_d_neg) | Description_clean %in% names(pathway_mapping_d_neg)) %>%
+  arrange(desc(neg_log_p)) %>%
+  mutate(
+    short_name = sapply(Description_clean, function(p) {
+      if (p %in% names(pathway_mapping_d_neg)) {
+        return(pathway_mapping_d_neg[[p]])
+      } else if (pathway %in% names(pathway_mapping_d_neg)) {
+        return(pathway_mapping_d_neg[[pathway]])
+      } else {
+        return(p)
+      }
+    })
+  ) %>%
+  group_by(short_name) %>%
+  slice(1) %>%  # Take the top pathway if multiple match
+  ungroup() %>%
+  arrange(desc(neg_log_p))
+
+# Combine data for plot d and set factor levels to control the order
+plot_d_data <- bind_rows(
+  mutate(plot_d_pos_selected, group = "Consensus up"),
+  mutate(plot_d_neg_selected, group = "Consensus down")
+) %>%
+  mutate(short_name = factor(short_name, levels = rev(c(
+    "ER_STRESS_RESPONSE", "CURATED_HYPOXIA", "HEME_MTB", "HALLMARK_HYPOXIA", "MTORC1_SIGNALING",
+    "RIBOSOME_BIOGENESIS", "MYC_TARGETS_V2", "NCRNA_PROCESSING", "E2F_TARGETS", "MYC_TARGETS_V1"
+  ))))
+
+# Create Plot d
+plot_d <- ggplot(plot_d_data, aes(x = neg_log_p, y = short_name, fill = group)) +
+  geom_bar(stat = "identity") +
+  geom_vline(xintercept = -log10(0.05), linetype = "dashed") +
+  scale_fill_manual(values = c("Consensus up" = "#8e44ad", 
+                               "Consensus down" = "#e74c3c"),
+                    name = "Quadrant") +
+  labs(
+    x = "-log10(p.adjust)",
+    y = ""
+  ) +
+  theme_minimal() +
+  theme(
+    legend.position = "top",
+    panel.grid.major.y = element_blank()
+  )
+plot_d
+
+rm(pathway_mapping_d_neg, pathway_mapping_d_pos, plot_d_neg, plot_d_pos, plot_d_neg_selected, plot_d_pos_selected, top_neg_pathways_d, top_pos_pathways_d)
+```
+
+# plot 5e
+
+```{r}
+###############################
+# Plot e: Absence in CC : MC positive/negative
+###############################
+# Prepare data for plot e
+plot_e_pos <- prepare_pathway_data("TRACER-Absence in CC : MC positive", ora_data)
+plot_e_neg <- prepare_pathway_data("TRACER-Absence in CC : MC negative", ora_data)
+
+# Define top pathways for "Absence in CC : MC positive" based on the screenshot
+top_pos_pathways_e <- c(
+  "MRNA_PROCESSING",
+  "PEPTIDYL_LYSINE_MOD",
+  "ER_TO_GOLGI_VESICLE_TRANS",
+  "MACROAUTOPHAGY",
+  "HISTONE_MODIFICATION"
+)
+
+# Map the cleaned pathways to the desired display names
+pathway_mapping_e_pos <- list(
+  "MRNA_PROCESSING" = "MRNA_PROCESSING",
+  "PEPTIDYL_LYSINE_MODIFICATION" = "PEPTIDYL_LYSINE_MOD",
+  "ENDOPLASMIC_RETICULUM_TO_GOLGI_VESICLE_MEDIATED_TRANSPORT" = "ER_TO_GOLGI_VESICLE_TRANS",
+  "MACROAUTOPHAGY" = "MACROAUTOPHAGY",
+  "HISTONE_MODIFICATION" = "HISTONE_MODIFICATION"
+)
+
+# Create dataframe for positive pathways
+plot_e_pos_selected <- plot_e_pos %>%
+  filter(pathway %in% names(pathway_mapping_e_pos) | Description_clean %in% names(pathway_mapping_e_pos)) %>%
+  arrange(desc(neg_log_p)) %>%
+  mutate(
+    short_name = sapply(Description_clean, function(p) {
+      if (p %in% names(pathway_mapping_e_pos)) {
+        return(pathway_mapping_e_pos[[p]])
+      } else if (pathway %in% names(pathway_mapping_e_pos)) {
+        return(pathway_mapping_e_pos[[pathway]])
+      } else {
+        return(p)
+      }
+    })
+  ) %>%
+  group_by(short_name) %>%
+  #slice(1) %>%  # Take the top pathway if multiple match
+  ungroup() %>%
+  arrange(desc(neg_log_p))
+
+# Define top pathways for "Absence in CC : MC negative" based on the screenshot
+top_neg_pathways_e <- c(
+  "FATTY_ACID_METABOLIC_PROCESS",
+  "DRUG_METABOLISM_CYTOCHROME_P450",
+  "BUTANOATE_METABOLISM",
+  "MONOCARBOXYLIC_ACID_METABOLIC_PROCESS",
+  "CLASSICAL_A",
+  "STEROID_BIOSYNTHESIS",
+  "TRYPTOPHAN_METABOLISM",
+  "RETINOL_METABOLISM",
+  "PYRUVATE_METABOLISM",
+  "HISTIDINE_METABOLISM"
+)
+
+# Map the cleaned pathways to the desired display names
+pathway_mapping_e_neg <- list(
+  "FATTY_ACID_METABOLIC_PROCESS" = "FATTY_ACID_MTB",
+  "DRUG_METABOLISM_CYTOCHROME_P450" = "DRUG_MTB",
+  "BUTANOATE_METABOLISM" = "BUTANOATE_MTB",
+  "MONOCARBOXYLIC_ACID_METABOLIC_PROCESS" = "MONOCARBOXYLIC_ACID_MTB",
+  "CLASSICAL_A" = "CLASSICAL_A_PDAC",
+  "STEROID_BIOSYNTHESIS" = "STEROID_BIOSYNTHESIS",
+  "TRYPTOPHAN_METABOLISM" = "TRYPTOPHAN_MTB",
+  "RETINOL_METABOLISM" = "RETINOL_MTB",
+  "PYRUVATE_METABOLISM" = "PYRUVATE_MTB",
+  "HISTIDINE_METABOLISM" = "HISTIDINE_MTB"
+)
+
+# Create dataframe for negative pathways
+plot_e_neg_selected <- plot_e_neg %>%
+  filter(pathway %in% names(pathway_mapping_e_neg) | Description_clean %in% names(pathway_mapping_e_neg)) %>%
+  arrange(desc(neg_log_p)) %>%
+  mutate(
+    short_name = sapply(Description_clean, function(p) {
+      if (p %in% names(pathway_mapping_e_neg)) {
+        return(pathway_mapping_e_neg[[p]])
+      } else if (pathway %in% names(pathway_mapping_e_neg)) {
+        return(pathway_mapping_e_neg[[pathway]])
+      } else {
+        return(p)
+      }
+    })
+  ) %>%
+  group_by(short_name) %>%
+  #slice(1) %>%  # Take the top pathway if multiple match
+  ungroup() %>%
+  arrange(desc(neg_log_p))
+
+# Combine data for plot e and set factor levels to control the order
+plot_e_data <- bind_rows(
+  mutate(plot_e_pos_selected, group = "MC-only up"),
+  mutate(plot_e_neg_selected, group = "MC-only down")
+) %>%
+  mutate(short_name = factor(short_name, levels = rev(c(
+    "MRNA_PROCESSING", "PEPTIDYL_LYSINE_MOD", "ER_TO_GOLGI_VESICLE_TRANS", 
+    "MACROAUTOPHAGY", "HISTONE_MODIFICATION",
+    "FATTY_ACID_MTB", "DRUG_MTB", "BUTANOATE_MTB", "MONOCARBOXYLIC_ACID_MTB", "CLASSICAL_A_PDAC",
+    "STEROID_BIOSYNTHESIS", "TRYPTOPHAN_MTB", "RETINOL_MTB", "PYRUVATE_MTB", "HISTIDINE_MTB"
+  ))))
+
+# Create Plot e
+plot_e <- ggplot(plot_e_data, aes(x = neg_log_p, y = short_name, fill = group)) +
+  geom_bar(stat = "identity") +
+  geom_vline(xintercept = -log10(0.05), linetype = "dashed") +
+  scale_fill_manual(values = c("MC-only up" = "#3498db", 
+                              "MC-only down" = "#2ecc71"),
+                    name = "Quadrant") +
+  labs(
+    x = "-log10(p.adjust)",
+    y = ""
+  ) +
+  theme_minimal() +
+  theme(
+    legend.position = "top",
+    panel.grid.major.y = element_blank()
+  )
+plot_e
+
+rm(pathway_mapping_e_neg, pathway_mapping_e_pos, plot_e_neg, plot_e_pos, plot_e_neg_selected, plot_e_pos_selected, top_neg_pathways_e, top_pos_pathways_e)
+```
+
+#save plots
+
+```{r}
+# Save the plots as PDF files
+ggsave("figure-5d.pdf", plot_d, width = 6, height = 4)
+ggsave("figure-5e.pdf", plot_e, width = 6, height = 4)
+```

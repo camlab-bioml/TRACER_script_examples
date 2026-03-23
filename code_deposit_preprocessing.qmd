@@ -1,0 +1,252 @@
+---
+title: "Tracer RNA-seq"
+format: html
+editor: visual
+---
+
+```{r}
+#| label: load-packages
+#| include: false
+suppressPackageStartupMessages({
+  library(tidyverse)
+  library(ggpubr)
+  library(RNAseqQC)
+  library(DESeq2)
+})
+```
+
+```{r}
+tracerdir = "./data/tracer/"
+```
+
+```{r}
+samples <- list.files(paste0(tracerdir, "quants/"), pattern = "^CC_.*\\.txt$")
+samples
+
+samples.all <- list.files(paste0(tracerdir, "quants/"), pattern = "\\.txt$")
+gsub("_featurecounts.txt", "", samples.all)
+
+write.csv(gsub("_featurecounts.txt", "", samples.all), "sample_names.csv", row.names = F)
+```
+
+```{r}
+tracercounts <- lapply(samples.all, function(sample) {
+  df <- read.table(paste0(tracerdir, "quants/", sample), header = T, sep = "\t") %>% 
+    select(Geneid, contains("bam"))
+  df
+})
+names(tracercounts) <- gsub("_featurecounts.txt", "", samples.all)
+```
+
+```{r}
+counts.mtx <- Reduce(function(x, y) inner_join(x, y, by = c("Geneid")), tracercounts)
+
+names(counts.mtx) <- str_remove(names(counts.mtx), "merged\\.")
+names(counts.mtx) <- str_remove(names(counts.mtx), "\\.bam")
+
+geneid <- counts.mtx$Geneid
+counts.mtx$Geneid <- NULL
+counts.mtx <- as.matrix(counts.mtx)
+rownames(counts.mtx) <- geneid
+```
+
+# load sample info (coldata)
+
+```{r}
+not_all_na <- function(x) (any(!is.na(x)))
+coldata <- read.csv(paste0(tracerdir, "sampleinfo.csv"), header = T) %>%
+  select(where(not_all_na)) %>%
+  drop_na()
+```
+
+```{r}
+coldata$sample_id <- paste0(coldata$Sample_name, "_S", coldata$Sample)
+coldata$sample_id <-  gsub("-", "_", coldata$sample_id, fixed = T)
+```
+
+# matched sample names between counts and metadata
+
+```{r}
+intersect(colnames(counts.mtx), coldata$sample_id)
+```
+
+# unmatched sample names between counts and metadata
+
+```{r}
+setdiff(colnames(counts.mtx), coldata$sample_id)
+```
+
+```{r}
+# colnames(counts.mtx) <- gsub("CC_Mac_L6N", "CC_Mac_L6B", colnames(counts.mtx), fixed = T)
+colnames(counts.mtx) <- plyr::mapvalues(colnames(counts.mtx),
+                                        from = c("CC_Mac_L6N_S28", "CC_Org_L1C_1_S15", "CC_Org_L3C_1_S16", "CC_Org_L6C_1_S17"),
+                                        to = c("CC_Mac_L6B_S28", "CC_Org_L1A_S15", "CC_Org_L3A_S16", "CC_Org_L6A_S17"))
+
+intersect(colnames(counts.mtx), coldata$sample_id)
+samples <- intersect(colnames(counts.mtx), coldata$sample_id)
+```
+
+```{r}
+coldata.cc <- coldata %>% filter(grepl("^CC_", sample_id))
+coldata.mc <- coldata %>% filter(!grepl("^CC_", sample_id))
+```
+
+```{r}
+coldata.cc$condition <- str_split(coldata.cc$sample_id, "_", simplify = T)[,3] %>% gsub('.{1}$', '', .)
+coldata.mc$condition <- str_split(coldata.mc$sample_id, "_", simplify = T)[,2] %>% gsub('.{1}$', '', .)
+
+coldata.cc$celltype <- str_split(coldata.cc$sample_id, "_", simplify = T)[,2]
+coldata.mc$celltype <- str_split(coldata.mc$sample_id, "_", simplify = T)[,1]
+```
+
+```{r}
+coldata <- rbind(coldata.cc, coldata.mc)
+```
+
+```{r}
+coldata <- coldata %>% separate(Passage.Donor, c("Passage", "Donor"))
+coldata$Donor[which(coldata$Sample_type == "Macrophage monoculture")] <- coldata$Passage[which(coldata$Sample_type == "Macrophage monoculture")]
+coldata$Passage[which(coldata$Sample_type == "Macrophage monoculture")] <- NA
+```
+
+```{r}
+counts.mtx <- counts.mtx[,(colnames(counts.mtx) %in% samples)]
+coldata <- coldata %>% 
+  filter(sample_id %in% samples) %>%
+  arrange(factor(sample_id, levels = samples))
+```
+
+```{r}
+saveRDS(counts.mtx, file = "counts_matrix.rds")
+saveRDS(coldata, file = "sample_metadata.rds")
+```
+
+# QC
+
+```{r}
+counts.mtx <- readRDS("counts_matrix.rds")
+coldata <- readRDS("sample_metadata.rds")
+```
+
+```{r}
+dds <- make_dds(counts = counts.mtx, metadata = coldata, ah_record = "AH104864")
+```
+
+## Total sample counts
+
+```{r}
+plot_total_counts(dds)
+```
+
+## Library complexity
+
+```{r}
+plot_library_complexity(dds)
+```
+
+## Gene detection
+
+```{r}
+p <- plot_gene_detection(dds)
+p
+df.gene.detection <- left_join(p$data, coldata, by = "sample_id")
+
+ggplot(df.gene.detection, aes(x = detection_threshold, y = number_of_genes, group = sample_id, color = celltype)) +
+  geom_line(aes(linetype = Sample_type)) +
+  theme_pubr(legend = "right") + 
+  labs(x = "detection threshold",
+       y = "number of genes")
+ggsave("test-gene-detection.png", device = "png", width = 10, height = 5, units = "in", dpi = 321)
+
+ggplot(df.gene.detection, aes(x = detection_threshold, y = number_of_genes, group = sample_id, color = Sample_type)) +
+  geom_line(aes(linetype = celltype)) +
+  theme_pubr(legend = "right") + 
+  labs(x = "detection threshold",
+       y = "number of genes")
+
+ggplot(df.gene.detection, aes(x = detection_threshold, y = number_of_genes, group = sample_id, color = condition)) +
+  geom_line(aes(linetype = celltype)) +
+  theme_pubr(legend = "right") + 
+  labs(x = "detection threshold",
+       y = "number of genes")
+```
+
+## Gene biotypes
+
+```{r}
+table(dds@rowRanges@elementMetadata$gene_biotype)
+plot_biotypes(dds)
+```
+
+## Gene filtering
+
+```{r}
+head(rownames(dds))
+grep("ENSG00000229807", rownames(dds))
+```
+
+```{r}
+dds <- filter_genes(dds, min_count = 10, min_rep = 9)
+```
+
+```{r}
+grep("ENSG00000229807", rownames(dds))
+```
+
+## Check expression of specific genes
+
+```{r}
+dds <- estimateSizeFactors(dds)
+plot_gene(dds = dds[,], gene = "ENSG00000229807", color_by = "Donor")
+```
+
+## Variance stabilization
+
+```{r}
+vsd <- vst(dds)
+saveRDS(vsd, file = "normalized_vst_transformed_counts.rds")
+mean_sd_plot(vsd)
+```
+
+## Chromosome expression
+
+```{r}
+map(seq(22), ~plot_chromosome(vsd, .x))
+```
+
+## Replicate variability
+
+```{r}
+# define new grouping variable
+colData(vsd)$group <- paste0(colData(vsd)$Sample_type, "_", colData(vsd)$celltype, "_", colData(vsd)$condition)
+
+ma_plots <- plot_sample_MAs(vsd, group = "group")
+cowplot::plot_grid(plotlist = ma_plots[1:3], ncol = 2)
+cowplot::plot_grid(plotlist = ma_plots[4:6], ncol = 2)
+cowplot::plot_grid(plotlist = ma_plots[7:9], ncol = 2)
+cowplot::plot_grid(plotlist = ma_plots[10:12], ncol = 2)
+cowplot::plot_grid(plotlist = ma_plots[13:15], ncol = 2)
+cowplot::plot_grid(plotlist = ma_plots[31:33], ncol = 2)
+cowplot::plot_grid(plotlist = ma_plots[34:36], ncol = 2)
+cowplot::plot_grid(plotlist = ma_plots[16:18], ncol = 2)
+```
+
+## Clustering
+
+```{r}
+# set seed to control random annotation colors
+set.seed(1)
+plot_sample_clustering(vsd, anno_vars = c("Sample_type", "celltype", "condition", "Donor", "Passage"), distance = "euclidean")
+plot_sample_clustering(vsd[,vsd$celltype == "Mac"], anno_vars = c("Sample_type", "celltype", "condition", "Donor", "Passage"), distance = "euclidean")
+plot_sample_clustering(vsd[,vsd$celltype == "Org"], anno_vars = c("Sample_type", "celltype", "condition", "Donor", "Passage"), distance = "euclidean")
+```
+
+## PCA
+
+```{r}
+plot_pca(vsd, PC_x = 1, PC_y = 2, color_by = "condition", shape_by = "celltype")
+plot_pca(vsd[,vsd$celltype == "Mac"], PC_x = 1, PC_y = 2, color_by = "condition", shape_by = "Sample_type")
+plot_pca(vsd[,vsd$celltype == "Mac"], PC_x = 1, PC_y = 2, color_by = "condition", shape_by = "Donor")
+plot_pca(vsd[,vsd$celltype == "Org"], PC_x = 1, PC_y = 2, color_by = "condition", shape_by = "Sample_type")
+plot_pca(vsd[,vsd$celltype == "Org"], PC_x = 1, PC_y = 2, color_by = "condition", shape_by = "Donor")
+```
